@@ -2,26 +2,15 @@
 Create content-based recommenders: Feature Encoding, TF-IDF/CosineSim
        using item/genre feature data
        
-
-
-
-
 Programmer name: << Your name here!!>>
-
-
-
-
 Collaborator/Author: Carlos Seminario
-
 sources: 
 https://www.freecodecamp.org/news/how-to-process-textual-data-using-tf-idf-in-python-cd2bbc0a94a3/
 http://blog.christianperone.com/2013/09/machine-learning-cosine-similarity-for-vector-space-models-part-iii/
 https://kavita-ganesan.com/tfidftransformer-tfidfvectorizer-usage-differences/#.XoT9p257k1L
-
 references:
 https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.TfidfVectorizer.html
 https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.CountVectorizer.html
-
 '''
 
 import numpy as np
@@ -32,7 +21,7 @@ from matplotlib import pyplot as plt
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-SIG_THRESHOLD = 0.3 # accept all positive similarities > 0 for TF-IDF/ConsineSim Recommender
+SIG_THRESHOLD = 0.0 # accept all positive similarities > 0 for TF-IDF/ConsineSim Recommender
                   # others: TBD ...
                   
                   
@@ -308,20 +297,25 @@ def cosine_sim(docs):
 
 def movie_to_ID(movies):
     ''' converts movies mapping from "id to title" to "title to id" '''
-    
-    pass
 
-def get_TFIDF_recommendations(prefs,cosim_matrix,user):
+    mov_to_id = {}
+
+    for id in movies:
+        mov_to_id[movies[id]] = id
+
+    return mov_to_id
+
+def get_TFIDF_recommendations(prefs,cosim_matrix,user, SIG_THRESHOLD, movie_title_to_id):
     '''
         Calculates recommendations for a given user 
-
         Parameters:
         -- prefs: dictionary containing user-item matrix
         -- cosim_matrix: list containing item_feature-item_feature cosine similarity matrix 
-        -- user: string containing name of user requesting recommendation        
-        
+        -- user: string containing name of user requesting recommendation
+        -- SIG_THRESHOLD: neighborhood similarity threshold
+        -- movie_title_to_id: dictionary that maps movie title to movieid        
         Returns:
-        -- ranknigs: A list of recommended items with 0 or more tuples, 
+        -- predictions: A list of recommended items with 0 or more tuples, 
            each tuple contains (predicted rating, item name).
            List is sorted, high to low, by predicted rating.
            An empty list is returned when no recommendations have been calc'd.
@@ -329,12 +323,73 @@ def get_TFIDF_recommendations(prefs,cosim_matrix,user):
     '''
     
     # find more details in Final Project Specification
-    pass
+    predictions = []
+    items_to_rate = []
+
+    for item, itemID in movie_title_to_id.items():
+        if item not in prefs[user].keys():
+            items_to_rate.append((item, int(itemID) - 1))
+    
+    for item,itemID in items_to_rate:
+        den = 0
+        num = 0
+
+        for mov, rating in prefs[user].items():
+            cossim = cosim_matrix[int(movie_title_to_id[mov])-1][itemID]
+            if cossim > SIG_THRESHOLD:
+                num += (cossim * rating)
+                den += cossim
+        
+        if den != 0:
+            predictions.append((num/den,item))
+    
+    predictions.sort(reverse = True)
+
+    return predictions
+
+def single_TFIDF_rec(prefs,cosim_matrix,user, SIG_THRESHOLD, movie_title_to_id, item):
+        '''
+        Calculates recommendations for a given user 
+        Parameters:
+        -- prefs: dictionary containing user-item matrix
+        -- cosim_matrix: list containing item_feature-item_feature cosine similarity matrix 
+        -- user: string containing name of user requesting recommendation
+        -- SIG_THRESHOLD: neighborhood similarity threshold
+        -- movie_title_to_id: dictionary that maps movie title to movieid 
+        -- item: item that requires recommendation for a specific user       
+        Returns:
+        -- ranknigs: A list of recommended items with 0 or more tuples, 
+           each tuple contains (predicted rating, item name).
+           List is sorted, high to low, by predicted rating.
+           An empty list is returned when no recommendations have been calc'd.
+        '''
+        predictions = []
+        items_to_rate = []
+
+        for title, itemID in movie_title_to_id.items():
+            if title == item:
+                items_to_rate.append((item, int(itemID) - 1))
+        
+        for item,itemID in items_to_rate:
+            den = 0
+            num = 0
+
+            for mov, rating in prefs[user].items():
+                cossim = cosim_matrix[int(movie_title_to_id[mov])-1][itemID]
+                if cossim > SIG_THRESHOLD:
+                    num += (cossim * rating)
+                    den += cossim
+            
+            if den != 0:
+                predictions.append((num/den,item))
+        
+        predictions.sort(reverse = True)
+
+        return predictions
 
 def get_FE_recommendations(prefs, features, movie_title_to_id, user):
     '''
         Calculates recommendations for a given user 
-
         Parameters:
         -- prefs: dictionary containing user-item matrix
         -- features: an np.array whose height is based on number of items
@@ -352,6 +407,7 @@ def get_FE_recommendations(prefs, features, movie_title_to_id, user):
     
     # find more details in Final Project Specification
     pass
+
 def similarity_histogram(sim_matrix):
 
     n = np.shape(sim_matrix)[0]
@@ -565,6 +621,7 @@ def main():
                 print (type(cosim_matrix), len(cosim_matrix))
                 print()
                 similarity_histogram(cosim_matrix)
+                #print(single_TFIDF_rec(prefs,cosim_matrix, "340", SIG_THRESHOLD, movie_to_ID(movies), 'Die Hard 2 (1990)'))
                 tfidf_ran = True
                 
                  
@@ -671,13 +728,9 @@ if __name__ == "__main__":
     
     
 '''
-
 Sample output ..
-
-
 RECS (for FE)
 ml-100k
-
 Enter userid (for ml-100k) or return to quit: 340
 rec for 340 = [
 (5.0, 'Woman in Question, The (1950)'), 
@@ -692,9 +745,7 @@ rec for 340 = [
 (4.836990595611285, 'Swan Princess, The (1994)')]
 
 RECS (for TFIDF)
-
 ml-100k
-
 Enter userid (for ml-100k) or return to quit: 340
 rec for 340 =  [
 (5.000000000000001, 'Wallace & Gromit: The Best of Aardman Animation (1996)'), 
@@ -707,7 +758,4 @@ rec for 340 =  [
 (5.0, 'Big Sleep, The (1946)'), 
 (4.823001861184155, 'Sword in the Stone, The (1963)'), 
 (4.823001861184155, 'Swan Princess, The (1994)')]
-
 '''
-
-
