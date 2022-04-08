@@ -18,9 +18,15 @@ import math
 import copy
 import pickle
 import pandas as pd
+from numpy.linalg import solve ## needed for als
+from sklearn.metrics import mean_squared_error
 import timeit
 from scipy.stats import spearmanr
 from scipy.stats import kendalltau
+from time import time
+from copy import deepcopy
+
+from mf_sgd_als_class import ExplicitMF
 
 
 def from_file_to_dict(path, datafile, itemfile):
@@ -67,6 +73,183 @@ def from_file_to_dict(path, datafile, itemfile):
     
     #return a dictionary of preferences
     return prefs
+
+def file_info(df):
+    ''' print file info/stats  '''
+    print()
+    print (df.head())
+    
+    n_users = df.user_id.unique().shape[0]
+    n_items = df.item_id.unique().shape[0]
+    
+    ratings = ratings_to_2D_matrix(df, n_users, n_items)
+    
+    print()
+    print (ratings)
+    print()
+    print (str(n_users) + ' users')
+    print (str(n_items) + ' items')
+    
+    sparsity = float(len(ratings.nonzero()[0]))
+    sparsity /= (ratings.shape[0] * ratings.shape[1])
+    sparsity *= 100
+    sparsity = 100 - sparsity
+    print ('Sparsity: {:4.2f}%'.format(sparsity))
+    return ratings
+
+def ratings_to_2D_matrix(ratings, m, n):
+    '''
+    creates a U-I matrix from the data
+    ==>>  eliminates movies (items) that have no ratings!
+    '''
+    print('Summary Stats:')
+    print()
+    print(ratings.describe())
+    ratingsMatrix = ratings.pivot_table(columns=['item_id'], index =['user_id'],
+        values='rating', dropna = False) # convert to a U-I matrix format from file input
+    ratingsMatrix = ratingsMatrix.fillna(0).values # replace nan's with zeroes
+    ratingsMatrix = ratingsMatrix[0:m,0:n] # get rid of any users/items that have no ratings
+    print()
+    print('2D_matrix shape', ratingsMatrix.shape) # debug
+    
+    return ratingsMatrix
+
+def train_test_split(ratings, TRAIN_ONLY):
+    ''' split the data into train and test '''
+    test = np.zeros(ratings.shape)
+    train = deepcopy(ratings) # instead of copy()
+    
+    ## setting the size parameter for random.choice() based on dataset size
+    if len(ratings) < 10: # critics
+        size = 1
+    elif len(ratings) < 1000: # ml-100k
+        size = 20
+    else:
+        size = 40 # ml-1m
+        
+    #print('size =', size) ## debug
+    
+    if TRAIN_ONLY == False:
+        np.random.seed(0) # do not randomize the random.choice() in this function,
+                          # let ALS or SGD make the decision to randomize
+                          # Note: this decision can be reset with np.random.seed()
+                          # .. see code at the end of this for loop
+        for user in range(ratings.shape[0]): ## CES changed all xrange to range for Python v3
+            test_ratings = np.random.choice(ratings[user, :].nonzero()[0], 
+                                            size=size, 
+                                            replace=True) #False)
+            # When replace=False, size for ml-100k = 20, for critics = 1,2, or 3
+            # Use replace=True for "better" results
+            
+            '''
+            np.random.choice() info ..
+            https://numpy.org/doc/stable/reference/random/generated/numpy.random.choice.html
+            
+            random.choice(a, size=None, replace=True, p=None)
+            
+            Parameters --
+            a:         1-D array-like or int
+            If an ndarray, a random sample is generated from its elements. 
+            If an int, the random sample is generated as if it were np.arange(a)
+            
+            size:      int or tuple of ints, optional
+            Output shape. If the given shape is, e.g., (m, n, k), 
+            then m * n * k samples are drawn. 
+            Default is None, in which case a single value is returned.
+        
+            replace:   boolean, optional
+            Whether the sample is with or without replacement. 
+            Default is True, meaning that a value of a can be selected multiple times.
+        
+            p:        1-D array-like, optional
+            The probabilities associated with each entry in a. If not given, 
+            the sample assumes a uniform distribution over all entries in a.
+    
+            Returns
+            samples:   single item or ndarray
+            The generated random samples
+            
+            '''
+            
+            train[user, test_ratings] = 0.
+            test[user, test_ratings] = ratings[user, test_ratings]
+            
+        # Test and training are truly disjoint
+        assert(np.all((train * test) == 0)) 
+        np.random.seed() # allow other functions to randomize
+    
+    #print('TRAIN_ONLY (in split) =', TRAIN_ONLY) ##debug
+    
+    return train, test
+    
+def test_train_info(test, train):
+    ''' print test/train info   '''
+
+    print()
+    print ('Train info: %d rows, %d cols' % (len(train), len(train[0])))
+    print ('Test info: %d rows, %d cols' % (len(test), len(test[0])))
+    
+    test_count = 0
+    for i in range(len(test)):
+        for j in range(len(test[0])):
+            if test[i][j] !=0:
+                test_count += 1
+                #print (i,j,test[i][j]) # debug
+    print('test ratings count =', test_count)
+    
+    train_count = 0
+    for i in range(len(train)):
+        for j in range(len(train[0])):
+            if train[i][j] !=0:
+                train_count += 1
+                #print (i,j,train[i][j]) # debug
+    
+    total_count = test_count + train_count
+    print('train ratings count =', train_count)
+    print('test + train count', total_count)
+    print('test/train percentages: %0.2f / %0.2f' 
+          % ( (test_count/total_count)*100, (train_count/total_count)*100 ))
+    print()
+
+def plot_learning_curve(iter_array, model):
+    ''' plot the error curve '''
+    
+    ## Note: the iter_array can cause plots to NOT 
+    ##    be smooth! If matplotlib can't smooth, 
+    ##    then print/plot results every 
+    ##    max_num_iterations/10 (rounded up)
+    ##    instead of using an iter_array list
+    
+    #print('model.test_mse', model.test_mse) # debug
+    if model.test_mse != ['n/a']:
+        plt.plot(iter_array, model.test_mse, label='Test', linewidth=3)
+    plt.plot(iter_array, model.train_mse, label='Train', linewidth=3)
+
+    plt.xticks(fontsize=10); # 16
+    plt.xticks(iter_array, iter_array)
+    plt.yticks(fontsize=10);
+    
+    axes = plt.gca()
+    axes.grid(True) # turns on grid
+    
+    if model.learning == 'als':
+        runtime_parms = \
+            'shape=%s, n_factors=%d, user_fact_reg=%.3f, item_fact_reg=%.3f'%\
+            (model.ratings.shape, model.n_factors, model.user_fact_reg, model.item_fact_reg)
+            #(train.shape, model.n_factors, model.user_fact_reg, model.item_fact_reg)
+        plt.title("ALS Model Evaluation\n%s" % runtime_parms , fontsize=10) 
+    elif model.learning == 'sgd':
+        runtime_parms = \
+            'shape=%s, num_factors K=%d, alpha=%.3f, beta=%.3f'%\
+            (model.ratings.shape, model.n_factors, model.sgd_alpha, model.sgd_beta)
+            #(train.shape, model.n_factors, model.learning_rate, model.user_fact_reg)
+        plt.title("SGD Model Evaluation\n%s" % runtime_parms , fontsize=10)         
+    
+    plt.xlabel('Iterations', fontsize=15);
+    plt.ylabel('Mean Squared Error', fontsize=15);
+    plt.legend(loc='best', fontsize=15, shadow=True) # 'best', 'center right' 20
+    
+    plt.show()
 
 def data_stats(prefs, filename):
     ''' Computes/prints descriptive analytics:
@@ -335,45 +518,7 @@ def sim_distance(prefs,person1,person2, weight):
 
     return sim
     
-def sim_tanimoto(prefs,p1,p2,weight):
-    '''
-    Returns the Tanimoto correlation coefficient for vectors p1 and p2 
-    https://en.wikipedia.org/wiki/Jaccard_index#Tanimoto_similarity_and_distance
-    
-    '''
-    
-    # Get the list of mutually rated items
-    si={}
-    for item in prefs[p1]: 
-        if item in prefs[p2]: 
-            si[item]=1
-  
-    # if there are no ratings in common, return 0
-    if len(si)==0: 
-        return 0
-    n = len(si)
-    # Sum calculations
-    n=len(si)
-    
-    # Sums of the squares
-    sum1Sq=sum([pow(prefs[p1][it],2) for it in si])
-    sum2Sq=sum([pow(prefs[p2][it],2) for it in si])
-  
-    # Sum of the products
-    pSum=sum([prefs[p1][it]*prefs[p2][it] for it in si])
-    
-    # Calculate r (Tanimoto score)
-    num=pSum
-    den=sum1Sq + sum2Sq - pSum
-    if den==0: 
-        return 0
-    if n < weight and weight != 1:
-        r = (num/den) * (n/weight)
-    else:
-        r = (num/den)
-    return r
 
-def sim_jaccard(prefs, p1, p2, weight):
     
     '''
     The Jaccard similarity index (sometimes called the Jaccard similarity coefficient)
@@ -478,7 +623,7 @@ def sim_cosine(prefs, p1, p2, weight):
         r = (num/den)
     return r
 
-def sim_spearman(prefs, p1, p2, weight):
+
     '''
     Calc Spearman's correlation coefficient using scipy function
     
@@ -523,62 +668,6 @@ def sim_spearman(prefs, p1, p2, weight):
     if n < weight and weight != 1:
         coef = coef*(n/weight)
 
-    return coef
-
-def sim_kendall_tau(prefs, p1, p2, weight):
-    '''
-    Calc Kendall Tau correlation coefficient using scipy function
-    
-    Enter >>> help(kendalltau) # to get helpful info
-    '''
-    
-    # Get the list of mutually rated items
-    si={}
-    for item in prefs[p1]: 
-        if item in prefs[p2]: 
-            si[item]=1
-  
-    # if there are no ratings in common, return 0
-    if len(si)==0: 
-        return 0
-    n = len(si)
-    # Sum calculations
-    n=len(si)
-    
-    # Sums of all the preferences
-    data1 = [prefs[p1][it] for it in si]
-    data2 = [prefs[p2][it] for it in si]
-    
-    len1 = len(data1)
-    len2 = len(data2)
-    
-    
-    coef, p = kendalltau(data1, data2)
-    
-    if -1 <= coef <= 1:
-        pass
-    else:
-        coef = 0
-        #print(coef, p1, p2)
-    
-    #sum_coef = 0
-    #for it in si:
-        #coef, p = kendalltau(prefs[p1][it], prefs[p2][it])
-        #coef, p = kendalltau(p1, p2)
-        #sum_coef += coef
-        #print('Kendall correlation coefficient: %.3f' % coef)
-    #coef = sum_coef/n
-    
-    if n < weight:
-        coef = coef *(n/weight)
-    '''
-    # interpret the significance
-    alpha = 0.05
-    if p > alpha:
-        print('Samples are uncorrelated (fail to reject H0) p=%.3f' % p)
-    else:
-        print('Samples are correlated (reject H0) p=%.3f' % p)    
-    '''
     return coef
 
 def getRecommendations(prefs,person, similarity=sim_pearson):
@@ -627,7 +716,7 @@ def getRecommendations(prefs,person, similarity=sim_pearson):
     rankings.reverse()
     return rankings
 
-def getRecommendationsSim(prefs, person, usersim):
+def getRecommendationsSim(prefs, person, usersim, weight, thresh):
     '''
         Calculates recommendations for a given user 
 
@@ -659,6 +748,7 @@ def getRecommendationsSim(prefs, person, usersim):
     
         # ignore scores of zero or lower
         if sim <= 0: continue
+        if sim < thresh: continue 
         for item in prefs[other]:
             
             # only score movies I haven't seen yet
@@ -699,7 +789,7 @@ def ext_getRecommendationsSim(prefs, person, usersim, removed_item, weight, thre
         if other == person: 
             continue
         
-        #finds the similarity weight from the user-user similarity matrix that has already been calculated
+        # finds the similarity weight from the user-user similarity matrix that has already been calculated
         # previously -- sim = similarity(prefs,person,other)
         sim = 0
         for tupl in usersim[person]:
@@ -983,7 +1073,7 @@ def calculateSimilarUsers(prefs, weight, n=100,similarity=sim_pearson):
         result[user]=scores
     return result
 
-def getRecommendedItems(prefs, user, itemMatch, weight):
+def getRecommendedItems(prefs, user, itemMatch, weight, thresh):
     '''
         Calculates recommendations for a given user 
 
@@ -1014,6 +1104,7 @@ def getRecommendedItems(prefs, user, itemMatch, weight):
             # ignore scores of zero or lower
             if similarity<=0: continue            
             # Weighted sum of rating times similarity
+            if similarity<thresh: continue 
             scores.setdefault(item2,0)
             scores[item2]+=similarity*rating*weight
             # Sum of all the similarities
@@ -1052,7 +1143,32 @@ def get_all_II_recs(prefs, itemsim, sim_method, num_users=10, top_N=5):
         if i >= num_users: 
             break
 
-def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh, runs, k):
+
+def get_uu_cf_matrix(sim):
+
+    if sim == "pearson": 
+        usersim = pickle.load(open( "save_usersim_pearson.p", "rb" ))  
+        
+    elif sim == "distance":
+        usersim = pickle.load(open( "save_usersim_distance.p", "rb" ))
+    else: 
+        print("User-based similarity matrix not computed, run SIMU command first")
+        return None
+    return usersim
+
+def get_ii_cf_matrix(sim):
+
+    if sim == "pearson": 
+        itemsim = pickle.load(open( "save_itemsim_pearson.p", "rb" ))  
+        
+    elif sim == "distance":
+        itemsim = pickle.load(open( "save_itemsim_distance.p", "rb" ))
+    else: 
+        print("User-based similarity matrix not computed, run SIMU command first")
+        return None
+    return itemsim
+
+def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh):
     """
     Leave-One_Out Evaluation: evaluates recommender system ACCURACY
      
@@ -1096,16 +1212,16 @@ def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh, runs, k):
             # if item not in set([rec[1] for rec in recs]):
             #         # print("From loo_cv_sim(), No prediction calculated for item %s, user %s in pred_list: %s" % (item, user, recs))
             #         continue
-        if len(mse_error_list) > 0:
-            if i%10 == 0:
-                print("(%d / %d) Number of users processed: %d " % (k, runs, i))
-                cur_time = timeit.default_timer()
-                print("%.2f secs for %d users, time per user: %.2f" % (cur_time - start_time, i, (cur_time - start_time)/i))
-                # print("Squared Error List:", mse_error_list)
-                mse = sum(mse_error_list)/len(mse_error_list) 
-                mae = sum(mae_error_list)/len(mae_error_list)
-                rmse = math.sqrt(sum(mse_error_list)/len(mse_error_list))
-                print("MSE: %f, RMSE: %f, MAE: %f" %(mse, rmse, mae))
+        # if len(mse_error_list) > 0:
+        #     if i%10 == 0:
+        #         print("(%d / %d) Number of users processed: %d " % (k, runs, i))
+        #         cur_time = timeit.default_timer()
+        #         print("%.2f secs for %d users, time per user: %.2f" % (cur_time - start_time, i, (cur_time - start_time)/i))
+        #         # print("Squared Error List:", mse_error_list)
+        #         mse = sum(mse_error_list)/len(mse_error_list) 
+        #         mae = sum(mae_error_list)/len(mae_error_list)
+        #         rmse = math.sqrt(sum(mse_error_list)/len(mse_error_list))
+        #         print("MSE: %f, RMSE: %f, MAE: %f" %(mse, rmse, mae))
 
     if len(mse_error_list) == 0:
         return 0, 0, 0, []
@@ -1131,18 +1247,18 @@ def main():
         # Start a simple dialog
         file_io = input('R(ead) critics data from file?, \n'
                         'RML(ead ml100K data)?, \n'
-                        'P(rint) the U-I matrix?, \n'
+                        'PD-R(ead) critics data from file?, \n'
+                        'PD-RML100(ead) ml100K data from file?, \n'
                         'V(alidate) the dictionary?, \n'
                         'S(tats) print?, \n'
-                        'D(istance) critics data?, \n'
-                        'PC(earson Correlation) critics data?, \n'
-                        'U(ser-based CF Recommendations)?, \n'
-                        'LCV(eave one out cross-validation)?, \n'
                         'SIM(ilarity matrix) calc for Item-based recommender?, \n'
                         'SIMU(ser-User matrix) calc for User-based recommender?, \n'
-                        'I(tem-based CF Recommendations)?, \n'
-                        'EXP(eriment)?, \n'
-                        'LCVSIM(eave one out cross-validation)? \n ==> ')
+                        'T(est/train datasets?, \n'
+                        'MF-ALS(atrix factorization- Alternating Least Squares)? \n'
+                        'MF-SGD(atrix factorization- Stochastic Gradient Descent)? \n'
+                        'TFIDF(and cosine sim Setup)?, \n'
+                        'LCVSIM(eave one out cross-validation)?, \n'
+                        'RECS(ecommendations -- all algos)? \n==> ')
         
         if file_io == 'R' or file_io == 'r':
             print()
@@ -1153,6 +1269,38 @@ def main():
             prefs = from_file_to_dict(path, file_dir+datafile, file_dir+itemfile)
             print('Number of users: %d\nList of users:' % len(prefs), 
                   list(prefs.keys()))      
+       
+        elif file_io == 'PD-R' or file_io == 'pd-r':
+            data_folder = '/data/' # for critics
+            #print('\npath: %s\n' % path_name + data_folder) # debug: print path info
+            names = ['user_id', 'item_id', 'rating', 'timestamp'] # column headings
+            
+            #Create pandas dataframe
+            df = pd.read_csv(path + data_folder + 'critics_ratings_userIDs.data', sep='\t', names=names) # for critics
+            ratings = file_info(df)
+            
+            # set test/train in case they were set by a previous file I/O command
+            test_train_done = False
+            print()
+            print('Test and Train arrays are empty!')
+            print()
+       
+        elif file_io == 'PD-RML100' or file_io == 'pd-rml100':
+            
+            # Load user-item matrix from file
+            ## Read in data: ml-100k
+            data_folder = '/data/ml-100k/' # for ml-100k                   
+            #print('\npath: %s\n' % path_name + data_folder) # debug: print path info
+            names = ['user_id', 'item_id', 'rating', 'timestamp'] # column headings
+    
+            #Create pandas dataframe
+            df = pd.read_csv(path + data_folder + 'u.data', sep='\t', names=names) # for ml-100k
+            ratings = file_info(df)
+            
+            test_train_done = False
+            print()
+            print('Test and Train arrays are empty!')
+            print()
 
         elif file_io == 'RML' or file_io == 'rml':
             print()
@@ -1186,17 +1334,7 @@ def main():
                 
             else:
                 print ('Empty dictionary, R(ead) in some data!')    
-        elif file_io == 'P' or file_io == 'p':
-            # print the u-i matrix
-            print()
-            if len(prefs) > 0:
-                print ('Printing "%s" dictionary from file' % datafile)
-                print ('User-item matrix contents: user, item, rating')
-                for user in prefs:
-                    for item in prefs[user]:
-                        print(user, item, prefs[user][item])
-            else:
-                print ('Empty dictionary, R(ead) in some data!')               
+        
         elif file_io == 'V' or file_io == 'v':      
             print()
             if len(prefs) > 0:
@@ -1209,6 +1347,7 @@ def main():
                 #      'Superman Returns': 4.0}
             else:
                 print ('Empty dictionary, R(ead) in some data!')              
+        
         elif file_io == 'S' or file_io == 's':
             print()
             filename = 'critics_ratings.data'
@@ -1217,6 +1356,7 @@ def main():
                 popular_items(prefs, filename)
             else: # Make sure there is data  to process ..
                 print ('Empty dictionary, R(ead) in some data!')   
+        
         elif file_io == 'PC' or file_io == 'pc':
             print()
             if len(prefs) > 0:             
@@ -1242,6 +1382,7 @@ def main():
                 
             else:
                 print ('Empty dictionary, R(ead) in some data!')    
+        
         elif file_io == 'U' or file_io == 'u':
             print()
             if len(prefs) > 0:             
@@ -1275,7 +1416,7 @@ def main():
                 
             else:
                 print ('Empty dictionary, R(ead) in some data!')     
-        # Testing the code ..
+       
         elif file_io == 'LCV' or file_io == 'lcv':
             print()
             if len(prefs) > 0:             
@@ -1288,7 +1429,6 @@ def main():
             else:
                 print ('Empty dictionary, R(ead) in some data!')            
         
- 
         elif file_io == 'I' or file_io == 'i':
             print()
             if len(prefs) > 0 and len(itemsim) > 0:                
@@ -1323,31 +1463,37 @@ def main():
                         itemsim = pickle.load(open( "save_itemsim_distance.p", "rb" ))
                         sim_method = 'sim_distance'
                         recType = 'item'
-    
+                        recAlgo = "item-based-distance"
+                        weight = 50
+                        thresh = 0.0
                     elif sub_cmd == 'RP' or sub_cmd == 'rp':
                         # Load the dictionary back from the pickle file.
                         itemsim = pickle.load(open( "save_itemsim_pearson.p", "rb" ))  
                         sim_method = 'sim_pearson'
                         recType = 'item'
-                        
+                        recAlgo = "item-based-pearson"
+                        weight = 50
+                        thresh = 0.0
                     elif sub_cmd == 'WD' or sub_cmd == 'wd':
                         # transpose the U-I matrix and calc item-item similarities matrix
                         weight = 50
                         itemsim = calculateSimilarItems(prefs, weight,similarity=sim_distance)                     
                         # Dump/save dictionary to a pickle file
                         pickle.dump(itemsim, open( "save_itemsim_distance.p", "wb" ))
-                        sim_method = 'sim_distance'
+                        sim_method = "sim_distance"
                         recType = 'item'
-                        
+                        recAlgo = "item-based-distance"
+                        thresh = 0.0
                     elif sub_cmd == 'WP' or sub_cmd == 'wp':
                         weight = 50
                         # transpose the U-I matrix and calc item-item similarities matrix
                         itemsim = calculateSimilarItems(prefs, weight, similarity=sim_pearson)                     
                         # Dump/save dictionary to a pickle file
                         pickle.dump(itemsim, open( "save_itemsim_pearson.p", "wb" )) 
-                        sim_method = 'sim_pearson'
+                        sim_method = "sim_pearson"
                         recType = 'item'
-                    
+                        recAlgo = "item-based-pearson"
+                        thresh = 0.0
                     else:
                         print("Sim sub-command %s is invalid, try again" % sub_cmd)
                         continue
@@ -1371,6 +1517,7 @@ def main():
                 
             else:
                 print ('Empty dictionary, R(ead) in some data!') 
+        
         elif file_io == 'Simu' or file_io == 'simu':
             print()
             if len(prefs) > 0: 
@@ -1381,30 +1528,40 @@ def main():
                         # Load the dictionary back from the pickle file.
                         usersim = pickle.load(open( "save_usersim_distance.p", "rb" ))
                         sim_method = 'sim_distance'
+                        recAlgo = "user-based-distance"
                         recType = 'user'
-    
+                        weight = 25
+                        thresh = 0.0
+
                     elif sub_cmd == 'RP' or sub_cmd == 'rp':
                         # Load the dictionary back from the pickle file.
                         usersim = pickle.load(open( "save_usersim_pearson.p", "rb" ))  
                         sim_method = 'sim_pearson'
+                        recAlgo = "user-based-pearson"
                         recType = 'user'
-                        
+                        weight = 1
+                        thresh = 0.3 
+
                     elif sub_cmd == 'WD' or sub_cmd == 'wd':
                         # transpose the U-I matrix and calc user-user similarities matrix
-                        usersim = calculateSimilarUsers(prefs,n=100,similarity=sim_distance)                     
+                        weight = 25
+                        usersim = calculateSimilarUsers(prefs, weight, n=100,similarity=sim_distance)                     
                         # Dump/save dictionary to a pickle file
                         pickle.dump(usersim, open( "save_usersim_distance.p", "wb" ))
-                        sim_method = 'sim_distance'
-                        recType = 'user'
-                        
+                        recAlgo = "user-based-distance"
+                        sim_method = "sim_distance"
+                        weight = 25
+                        thresh = 0.0
                     elif sub_cmd == 'WP' or sub_cmd == 'wp':
                         # transpose the U-I matrix and calc user-user similarities matrix
-                        usersim = calculateSimilarUsers(prefs,n=100,similarity=sim_pearson)
+                        weight = 1
+                        usersim = calculateSimilarUsers(prefs,weight, n=100,similarity=sim_pearson)
                         # Dump/save dictionary to a pickle file
                         pickle.dump(usersim, open( "save_usersim_pearson.p", "wb" )) 
-                        sim_method = 'sim_pearson'
-                        recType = 'user'
-                    
+                        recAlgo = "user-based-pearson"
+                        sim_method = "sim_pearson"
+                        weight = 1
+                        thresh = 0.3 
                     else:
                         print("Simu sub-command %s is invalid, try again" % sub_cmd)
                         continue
@@ -1426,123 +1583,353 @@ def main():
                 
             else:
                 print ('Empty dictionary, R(ead) in some data!') 
+       
         elif file_io == 'LCVSIM' or file_io == 'lcvsim':
             print()
-            if recType == 'user':
-                recsim = usersim
-            elif recType == 'item':
-                recsim = itemsim
-            n = 100
-            weight = 50
-            thresh = 0.5
-            if len(prefs) > 0 and recsim !={}:             
-                
-                if len(prefs) == 7:
-                    prefs_name = 'critics'
-                else:
-                    prefs_name = 'ML-100k'
-                
-                if recType == 'user':
-                    algo = ext_getRecommendationsSim
-                    rec = 'User'
-                elif recType == 'item':
-                    algo = ext_getRecommendedItems 
-                    rec ='Item'
-                else:
-                    print('Invalid Recommendation Type')
-                
-                if sim_method == 'sim_pearson': 
-                    print('%s-based LOO_CV_SIM Evaluation:' % rec)
+            if ready: 
+                if recAlgo == "user-based-pearson":
+                    sim_matrix = get_uu_cf_matrix("pearson")
                     sim = sim_pearson
-                    
-                    print("%s-based, SIM: %s, SIG_WTG_CUTOFF: %d, SIM_THRESH: %f, NUM_NEIGHBORS: %d" %  (rec, str(sim), weight, thresh, n))
-                    mse, mae, rmse, error_list  = loo_cv_sim(prefs, sim, algo, recsim, weight, thresh, 1, 1)
-                    
-                    print('%s for %s: %.5f, len(SE list): %d using %s ' % ("MSE", prefs_name, mse, len(error_list), sim) )
-                    print('%s for %s: %.5f, len(SE list): %d using %s ' % ("MAE", prefs_name, mae, len(error_list), sim) )
-                    print('%s for %s: %.5f, len(SE list): %d using %s ' % ("RMSE", prefs_name, rmse, len(error_list), sim) )
-                    print()
-                elif sim_method == 'sim_distance':
-                    print('%s-based LOO_CV_SIM Evaluation:' % rec)
+                    algo = ext_getRecommendationsSim
+                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                elif recAlgo == "user-based-distance":
+                    sim_matrix = get_uu_cf_matrix("distance")
                     sim = sim_distance
-                    print("%s-based, SIM: %s, SIG_WTG_CUTOFF: %d, SIM_THRESH: %f, NUM_NEIGHBORS: %d" %  (rec, str(sim), weight, thresh, n))
-                    mse, mae, rmse, error_list  = loo_cv_sim(prefs, sim, algo, recsim, weight, thresh, 1, 1)
+                    algo = ext_getRecommendationsSim
+                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                elif recAlgo == "item-based-pearson":
+                    sim_matrix = get_ii_cf_matrix("pearson")
+                    sim = sim_pearson
+                    algo = ext_getRecommendedItems
+                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                elif recAlgo == 'item-based-distance':
+                    sim_matrix = get_ii_cf_matrix("distance")
+                    sim = sim_distance
+                    algo = ext_getRecommendedItems
+                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                
+                print('%s-based LOO_CV_SIM Evaluation:' % recAlgo)
+                
+                coverage = len(error_list)/(len(prefs)*len(prefs))
+                print('%s for ML-100K: %.5f, len(SE list): %d ' % ("MSE", mse, len(error_list)) )
+                print('%s for ML-100K: %.5f, len(SE list): %d ' % ("MAE", mae, len(error_list)) )
+                print('%s for ML-100K: %.5f, len(SE list): %d ' % ("RMSE", rmse, len(error_list)) )
+                print('%s for ML-100K: %.5f, len(SE list): %d ' % ("Coverage", rmse, len(error_list)) )
+                print()
                     
-                    print('%s for %s: %.5f, len(SE list): %d using %s ' % ("MSE", prefs_name, mse, len(error_list), sim) )
-                    print('%s for %s: %.5f, len(SE list): %d using %s ' % ("MAE", prefs_name, mae, len(error_list), sim) )
-                    print('%s for %s: %.5f, len(SE list): %d using %s ' % ("RMSE", prefs_name, rmse, len(error_list), sim) )
-                    print()
-                else:
-                    print('Run Sim(ilarity matrix) command to create/load Sim matrix!')
-                if prefs_name == 'critics':
-                    print(error_list)
             else:
-                print ('Empty dictionary, run R(ead) OR Empty Sim Matrix, run Sim!')
+                print('Run Sim(ilarity matrix) command to create/load Sim matrix!')
+            
+           
+        
+        elif file_io == 'T' or file_io == 't':
+            if len(ratings) > 0:
+                answer = input('Generate both test and train data? Y or y, N or n: ')
+                if answer == 'N' or answer == 'n':
+                    TRAIN_ONLY = True
+                else:
+                    TRAIN_ONLY = False
+                
+                #print('TRAIN_ONLY  in EVAL =', TRAIN_ONLY) ## debug
+                train, test = train_test_split(ratings, TRAIN_ONLY) ## this should 
+                ##     be only place where TRAIN_ONLY is needed!! 
+                ##     Check for len(test)==0 elsewhere
+                
+                test_train_info(test, train) ## print test/train info
+        
+                ## How is MSE calculated for train?? self.ratings is the train
+                ##    data when ExplicitMF is instantiated for both als and sgd.
+                ##    So, MSE calc is between predictions based on train data 
+                ##    against the actuals for train data
+                ## How is MSE calculated for test?? It's comparing the predictions
+                ##    based on train data against the actuals for test data
+                
+                test_train_done = True
+                print()
+                print('Test and Train arrays are ready!')
+                print()
+            else:
+                print ('Empty U-I matrix, read in some data!')
+                print()            
+    
+        elif file_io == 'MF-ALS' or file_io == 'mf-als':
+            
+            if len(ratings) > 0:
+                if test_train_done:
+                    
+                    ## als processing
+                    
+                    print()
+                    ## sample instantiations ..
+                    if len(ratings) < 10: ## for critics
+                        print('Sample for critics .. ')
+                        iter_array = [1, 2, 5, 10, 20]
+                        MF_ALS = ExplicitMF(train, learning='als', n_factors=2, user_fact_reg=1, item_fact_reg=1, max_iters=max(iter_array), verbose=True)
+                        print('[2,1,20]')
+                    
+                    elif len(ratings) < 1000: ## for ml-100k
+                        print('Sample for ml-100k .. ')
+                        iter_array = [1, 2, 5 , 10, 20, 50] #, 100] #, 200]
+                        MF_ALS = ExplicitMF(train, learning='als', n_factors=20, user_fact_reg=.01, item_fact_reg=.01, max_iters=max(iter_array), verbose=True) 
+                        print('[20,0.01,50]')
+                    
+                    elif len(ratings) < 10000: ## for ml-1m
+                        print('Sample for ml-1M .. ')
+                        iter_array = [1, 2, 5, 10] 
+                        MF_ALS = ExplicitMF(train, learning='als', n_factors=20, user_fact_reg=.1, item_fact_reg=.1, max_iters=max(iter_array), verbose=True) 
+                        print('[20,0.1,10]')
+                        
+                    parms = input('Y or y to use these parameters or Enter to modify: ')# [2,0.01,10,False]
+                    if parms == 'Y' or parms == 'y':
+                        pass
+                    else:
+                        parms = eval(input('Enter new parameters as a list: [n_factors, reg, iters]: '))
+                        
+                        # instantiate with this set of parms
+                        MF_ALS = ExplicitMF(train,learning='als', 
+                                            n_factors=parms[0], 
+                                            user_fact_reg=parms[1], 
+                                            item_fact_reg=parms[1])
+                       
+                        # set up the iter_array for this run to pass on
+                        orig_iter_array = [1, 2, 5, 10, 20, 50, 100, 200]
+                        i_max = parms[2]
+                        index = orig_iter_array.index(i_max)
+                        iter_array = []
+                        for i in range(0, index+1):
+                            iter_array.append(orig_iter_array[i])
+                            
+                    # run the algo and plot results
+                    MF_ALS.calculate_learning_curve(iter_array, test) 
+                    # plot_learning_curve(iter_array, MF_ALS )
+                    recAlgo = "MF_ALS"
+                    ready = True
+                else:
+                    print ('Empty test/train arrays, run the T command!')
+                    print()                    
+            else:
+                print ('Empty U-I matrix, read in some data!')
+                print()
+                    
+        elif file_io == 'MF-SGD' or file_io == 'mf-sgd':
+            
+            if len(ratings) > 0:
+                
+                if test_train_done:
+                
+                    ## sgd processing
+                     
+                    ## sample instantiations ..
+                    if len(ratings) < 10: ## for critics
+                        # Use these parameters for small matrices
+                        print('Sample for critics .. ')
+                        iter_array = [1, 2, 5, 10, 20]                     
+                        MF_SGD = ExplicitMF(train, 
+                                            n_factors=2, 
+                                            learning='sgd', 
+                                            sgd_alpha=0.075,
+                                            sgd_beta=0.01, 
+                                            max_iters=max(iter_array), 
+                                            sgd_random=False)
+                        print('[2, 0.075, 0.01, 20]')
+                        print()
 
-        elif file_io == 'exp' or file_io == 'EXP':
-            results = pd.DataFrame(columns=["Algorithm", "Sim. Method", "Sig. Weighting", "Sim. Threshold", "MSE", "MAE", "RMSE", "len(SE list)"])
-            n = 100
-            k = 0
-            sim_methods = [sim_pearson, sim_distance, sim_cosine]
-            rec_algorithms = [ext_getRecommendationsSim, ext_getRecommendedItems]
-            sim_weightings = [1, 25, 50]
-            sim_thresholds = [0, 0.3, 0.5]
-            runs = len(sim_methods)*len(rec_algorithms)*len(sim_weightings)*len(sim_thresholds)
+                    elif len(ratings) < 1000:
+                       # Use these parameters for ml-100k
+                        print('Sample for ml-100k .. ')
+                        iter_array = [1, 2, 5, 10, 20]                     
+                        MF_SGD = ExplicitMF(train, 
+                                            n_factors=2, 
+                                            learning='sgd', 
+                                            sgd_alpha=0.02,
+                                            sgd_beta=0.2, 
+                                            max_iters=max(iter_array), 
+                                            sgd_random=False, verbose=True)
+                        print('[2, 0.02, 0.2, 20]')
+                        
+                        '''
+                        [2, 0.02, 0.2, 20]
+                        Iteration: 20
+                        Train mse: 0.8385557879257434
+                        Elapsed train/test time 49.83 secs
+                        
+                        
+                        [2, 0.02, 0.2, 20]
+                        Iteration: 20
+                        Train mse: 0.8297642823863384
+                        Test mse: 0.9327376374604811
+                        Elapsed train/test time 43.19 secs
+                        
+                        
+                        [2, 0.02, 0.2, 100]
+                        Iteration: 100
+                        Train mse: 0.790743571610336
+                        Test mse: 0.9145944592112709
+                        Elapsed train/test time 169.78 secs
+                        
+                        '''
+                         
+                    elif len(ratings) < 10000:
+                       # Use these parameters for ml-1m
+                        print('Sample for ml-1m .. ')
+                        iter_array = [1, 2, 5, 10] #, 20, 50, 100]                     
+                        MF_SGD = ExplicitMF(train, 
+                                            n_factors=20, 
+                                            learning='sgd', 
+                                            sgd_alpha=0.1,
+                                            sgd_beta=0.1, 
+                                            max_iters=max(iter_array), 
+                                            sgd_random=False, verbose=True)
+                        print('[20, 0.1, 0.1, 10]') # 100]')
+                        
+                        '''
+                        
+                        [20, 0.1, 0.1, 100]
+                        Iteration: 100
+                        Train mse: 0.7670492245886339
+                        Test mse: 0.8881805974749858
+                        Elapsed train/test time 1670.80 secs
+                        
+                        
+                        [200, 0.1, 0.1, 100]
+                        Iteration: 100
+                        Train mse: 0.7588100351334094
+                        Test mse: 0.8834154624525616
+                        Elapsed train/test time 1919.23 secs
+                        '''
+                     
+                    parms = input('Y or y to use these parameters or Enter to modify: ')# [2,0.01,10,False]
+                    if parms == 'Y' or parms == 'y':
+                        pass
+                    else:
+                        parms = eval(input('Enter new parameters as a list: [n_factors K, learning_rate alpha, reg beta, max_iters: ')) #', random]: '))
+                        MF_SGD = ExplicitMF(train, n_factors=parms[0], 
+                                            learning='sgd', 
+                                            sgd_alpha=parms[1], 
+                                            sgd_beta=parms[2], 
+                                            max_iters=parms[3], 
+                                            sgd_random=False, verbose=True)  
+
+                        orig_iter_array = [1, 2, 5, 10, 20, 50, 100, 200]
+                        i_max = parms[3]
+                        index = orig_iter_array.index(i_max)
+                        iter_array = []
+                        for i in range(0, index+1):
+                            iter_array.append(orig_iter_array[i])
+                         
+                    MF_SGD.calculate_learning_curve(iter_array, test) # start the training
+                    # plot_learning_curve(iter_array, MF_SGD)    
+                    recAlgo = "MF_SGD"
+                    ready = True
+                else:
+                    print ('Empty test/train arrays, run the T command!')
+                    print() 
+        
+        elif file_io == 'RECS' or file_io == 'recs': 
+            user = input("Enter user: ")
+            n = 5
+            if ready: 
+                if recAlgo == "item-based-pearson":
+                    sim_matrix = get_ii_cf_matrix("pearson")
+                    
+                    thresh = 0.0
+                    recommendation = getRecommendedItems(prefs, user, sim_matrix, weight, thresh)[:n]
+                elif recAlgo == "item-based-distance":
+                    
+                    thresh = 0.0
+                    sim_matrix = get_ii_cf_matrix("distance")
+                    recommendation = getRecommendedItems(prefs, user, sim_matrix, weight, thresh)[:n]
+                elif recAlgo == "user-based-pearson":
+                    
+                    thresh = 0.3
+                    sim_matrix = get_uu_cf_matrix("pearson")
+                    recommendation = getRecommendationsSim(prefs, user, sim_matrix, weight, thresh)[:n]
+                elif recAlgo == "user-based-distance":
+                    
+                    thresh = 0.0
+                    sim_matrix = get_uu_cf_matrix("distance")
+                    recommendation = getRecommendationsSim(prefs, user, sim_matrix, weight, thresh)[:n]
+                elif recAlgo == "MF_ALS":
+                    predictions = MF_ALS.predict_all()
+                    user_preds = predictions[int(user)]
+                    user_preds.sort()
+                    user_preds = np.flip(user_preds)
+                    recommendation = user_preds[:n]
+                elif recAlgo == "MF_SGD":
+                    predictions = MF_SGD.predict_all()
+                    user_preds = predictions[int(user)]
+                    user_preds.sort()
+                    user_preds = np.flip(user_preds)
+                    recommendation = user_preds[:n]
+                print("Top %d Recommendations from %s are: " % (n,recAlgo))
+                print(recommendation)
+            else: 
+                print("Similarity matrix not ready. ")
+                print()
+
+        # elif file_io == 'exp' or file_io == 'EXP':
+        #     results = pd.DataFrame(columns=["Algorithm", "Sim. Method", "Sig. Weighting", "Sim. Threshold", "MSE", "MAE", "RMSE", "len(SE list)"])
+        #     n = 100
+        #     k = 0
+        #     sim_methods = [sim_pearson, sim_distance, sim_cosine]
+        #     rec_algorithms = [ext_getRecommendationsSim, ext_getRecommendedItems]
+        #     sim_weightings = [1, 25, 50]
+        #     sim_thresholds = [0, 0.3, 0.5]
+        #     runs = len(sim_methods)*len(rec_algorithms)*len(sim_weightings)*len(sim_thresholds)
            
               
-            for sim in sim_methods: 
-                if sim == sim_distance:
-                    sim_str = "distance"
-                elif sim == sim_cosine:
-                    sim_str = "cosine"
-                elif sim == sim_jaccard: 
-                    sim_str = "jaccard"
-                elif sim == sim_kendall_tau: 
-                    sim_str = "kendal tau"
-                elif sim == sim_spearman: 
-                    sim_str = 'spearman'
-                elif sim == sim_tanimoto: 
-                    sim_str = 'tanimoto'
-                else: 
-                    sim_str = "pearson"
-                for algo in rec_algorithms: 
-                    for weight in sim_weightings:
-                        for thresh in sim_thresholds:
-                            k+=1 
-                            data = {}
+        #     for sim in sim_methods: 
+        #         if sim == sim_distance:
+        #             sim_str = "distance"
+        #         elif sim == sim_cosine:
+        #             sim_str = "cosine"
+        #         elif sim == sim_jaccard: 
+        #             sim_str = "jaccard"
+        #         elif sim == sim_kendall_tau: 
+        #             sim_str = "kendal tau"
+        #         elif sim == sim_spearman: 
+        #             sim_str = 'spearman'
+        #         elif sim == sim_tanimoto: 
+        #             sim_str = 'tanimoto'
+        #         else: 
+        #             sim_str = "pearson"
+        #         for algo in rec_algorithms: 
+        #             for weight in sim_weightings:
+        #                 for thresh in sim_thresholds:
+        #                     k+=1 
+        #                     data = {}
                             
-                            if algo == ext_getRecommendationsSim:
-                                #sim_matrix = pickle.load(open( "save_usersim_distance.p", "rb" ))
-                                sim_matrix = calculateSimilarUsers(prefs, weight,similarity=sim)
-                                #pickle.dump(sim_matrix, open( "save_usersim_" + sim_str + ".p", "wb" ))
-                                algo_str = 'User-based'
-                                new_weight = False
-                            else: 
-                                sim_matrix = calculateSimilarItems(prefs, weight,similarity=sim)
-                                #pickle.dump(sim_matrix, open( "save_itemsim_" + sim_str + ".p", "wb" ))
-                                algo_str = 'Item-based'
-                                new_weight = False
-                            # else:
-                            #     if algo == ext_getRecommendationsSim:
-                            #         sim_matrix = pickle.load(open( "save_usersim_" + sim_str + ".p", "rb" ))
-                            #         algo_str = 'User-based'
-                            #     else:
-                            #         sim_matrix = pickle.load(open( "save_itemsim_" + sim_str + ".p", "rb" ))
-                            #         algo_str = 'Item-based'
+        #                     if algo == ext_getRecommendationsSim:
+        #                         #sim_matrix = pickle.load(open( "save_usersim_distance.p", "rb" ))
+        #                         sim_matrix = calculateSimilarUsers(prefs, weight,similarity=sim)
+        #                         #pickle.dump(sim_matrix, open( "save_usersim_" + sim_str + ".p", "wb" ))
+        #                         algo_str = 'User-based'
+        #                         new_weight = False
+        #                     else: 
+        #                         sim_matrix = calculateSimilarItems(prefs, weight,similarity=sim)
+        #                         #pickle.dump(sim_matrix, open( "save_itemsim_" + sim_str + ".p", "wb" ))
+        #                         algo_str = 'Item-based'
+        #                         new_weight = False
+        #                     # else:
+        #                     #     if algo == ext_getRecommendationsSim:
+        #                     #         sim_matrix = pickle.load(open( "save_usersim_" + sim_str + ".p", "rb" ))
+        #                     #         algo_str = 'User-based'
+        #                     #     else:
+        #                     #         sim_matrix = pickle.load(open( "save_itemsim_" + sim_str + ".p", "rb" ))
+        #                     #         algo_str = 'Item-based'
 
-                            print(algo_str, sim_str, weight, thresh)
+        #                     print(algo_str, sim_str, weight, thresh)
 
-                            mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh, runs, len(results))
-                            wtg_string = "n/" + str(weight)
-                            data["Algorithm"], data['Sim. Method'], data['Sig. Weighting'], data['Sim. Threshold'] = algo_str, sim_str, wtg_string, thresh
-                            data['MSE'], data['MAE'], data['RMSE'], data['len(SE list)'] = mse, mae, rmse, len(error_list)
+        #                     mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh, runs, len(results))
+        #                     wtg_string = "n/" + str(weight)
+        #                     data["Algorithm"], data['Sim. Method'], data['Sig. Weighting'], data['Sim. Threshold'] = algo_str, sim_str, wtg_string, thresh
+        #                     data['MSE'], data['MAE'], data['RMSE'], data['len(SE list)'] = mse, mae, rmse, len(error_list)
                 
-                            results = results.append(data, ignore_index=True)
-                            print("%d / %d" % (len(results), runs))
+        #                     results = results.append(data, ignore_index=True)
+        #                     print("%d / %d" % (len(results), runs))
 
-                            results.to_csv("experiment_results-" + str(k) + ".csv")  
+        #                     results.to_csv("experiment_results-" + str(k) + ".csv")  
         
-
         else:
             done = True
     
