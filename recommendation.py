@@ -21,13 +21,13 @@ import pandas as pd
 from numpy.linalg import solve ## needed for als
 from sklearn.metrics import mean_squared_error
 import timeit
-from scipy.stats import spearmanr
-from scipy.stats import kendalltau
 from time import time
 from copy import deepcopy
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 from mf_sgd_als_class import ExplicitMF
-
+SIG_THRESHOLD = 0.0
 
 def from_file_to_dict(path, datafile, itemfile):
     ''' Load user-item matrix from specified file 
@@ -338,7 +338,78 @@ def data_stats(prefs, filename):
     plt.grid()
     plt.show()
     plt.close()
-          
+def from_file_to_2D(path, genrefile, itemfile):
+    ''' Load feature matrix from specified file 
+        Parameters:
+        -- path: directory path to datafile and itemfile
+        -- genrefile: delimited file that maps genre to genre index
+        -- itemfile: delimited file that maps itemid to item name and genre
+        
+        Returns:
+        -- movies: a dictionary containing movie titles (value) for a given movieID (key)
+        -- genres: dictionary, key is genre, value is index into row of features array
+        -- features: a 2D list of features by item, values are 1 and 0;
+                     rows map to items and columns map to genre
+                     returns as np.array()
+    
+    '''
+    # Get movie titles, place into movies dictionary indexed by itemID
+    movies={}
+    try:
+        with open (path + '/' + itemfile, encoding='iso8859') as myfile: 
+            # this encoding is required for some datasets: encoding='iso8859'
+            for line in myfile:
+                (id,title)=line.split('|')[0:2] 
+                movies[id]=title.strip()
+    
+    # Error processing
+    except UnicodeDecodeError as ex:
+        print (ex)
+        print (len(movies), line, id, title)
+        return {}
+    except ValueError as ex:
+        print ('ValueError', ex)
+        print (len(movies), line, id, title)
+    except Exception as ex:
+        print (ex)
+        print (len(movies))
+        return {}
+    
+    ##
+    # Get movie genre from the genre file, place into genre dictionary indexed by genre index
+    genres={} # key is genre index, value is the genre string
+    try: 
+        for line in open(path+'/'+ genrefile, encoding='iso8859'):
+            #print(line, line.split('|')) #debug
+            fields = line.split('|')
+            genres[int(fields[1].split('\n')[0])] = fields[0]
+    except Exception as ex:
+        print (ex)
+        print ('Proceeding with len(genres)', len(genres))
+    
+
+
+    
+    # Load data into a nested 2D list
+    features = []
+    start_feature_index = 5
+    try: 
+        for line in open(path+'/'+ itemfile, encoding='iso8859'):
+            #print(line, line.split('|')) #debug
+            fields = line.split('|')[start_feature_index:]
+            row = []
+            for feature in fields:
+                row.append(int(feature))
+            features.append(row)
+        features = np.array(features)
+    except Exception as ex:
+        print (ex)
+        print ('Proceeding with len(features)', len(features))
+        #return {}
+    
+    #return features matrix
+    return movies, genres, features  
+
 def popular_items(prefs, filename): 
     ''' Computes/prints popular items analytics    
         -- popular items: most rated (sorted by # ratings)
@@ -519,69 +590,6 @@ def sim_distance(prefs,person1,person2, weight):
     return sim
     
 
-    
-    '''
-    The Jaccard similarity index (sometimes called the Jaccard similarity coefficient)
-    compares members for two sets to see which members are shared and which are distinct.
-    It’s a measure of similarity for the two sets of data, with a range from 0% to 100%. 
-    The higher the percentage, the more similar the two populations. Although it’s easy to
-    interpret, it is extremely sensitive to small samples sizes and may give erroneous
-    results, especially with very small samples or data sets with missing observations.
-    https://www.statisticshowto.datasciencecentral.com/jaccard-index/
-    https://en.wikipedia.org/wiki/Jaccard_index
-    
-    The formula to find the Index is:
-    Jaccard Index = (the number in both sets) / (the number in either set) * 100
-    
-    In Steps, that’s:
-    Count the number of members which are shared between both sets.
-    Count the total number of members in both sets (shared and un-shared).
-    Divide the number of shared members (1) by the total number of members (2).
-    Multiply the number you found in (3) by 100.
-    
-    A simple example using set notation: How similar are these two sets?
-
-    A = {0,1,2,5,6}
-    B = {0,2,3,4,5,7,9}
-
-    Solution: J(A,B) = |A∩B| / |A∪B| = |{0,2,5}| / |{0,1,2,3,4,5,6,7,9}| = 3/9 = 0.33.
-
-    Notes:
-    The cardinality of A, denoted |A| is a count of the number of elements in set A.
-    Although it’s customary to leave the answer in decimal form if you’re using set 
-    notation, you could multiply by 100 to get a similarity of 33.33%.
-
-    '''
-    # Get the lists of mutually rated and unique items
-    common_items={}
-    unique_items={}
-    for item in prefs[p1]: 
-        if item in prefs[p2]: 
-            # common_items[item]=1 # Case 0: count as common_items if item is rated in both lists 
-            if prefs[p1][item] == prefs[p2][item]: # Case 1: rating must match exactly!
-            #if abs(prefs[p1][item] - prefs[p2][item]) <= 0.5: # Case 2: rating must be +/- 0.5!
-                common_items[item]=1
-            else:
-                unique_items[item]=1
-        else:
-            unique_items[item]=1
-  
-    # if there are no ratings in common, return 0
-    if len(common_items)==0: 
-        return 0
-    n = len(common_items)
-    # Sum calculations
-    num=len(common_items)
-  
-    # Calculate Jaccard index
-    den=len(common_items) + len(unique_items)
-    if den==0: 
-        return 0
-    if n < weight and weight != 1:
-        jaccard_index=(num/den)*(n/weight)
-    else: 
-        jaccard_index=(num/den)
-    return jaccard_index    
 
 def sim_cosine(prefs, p1, p2, weight):
     '''
@@ -623,52 +631,275 @@ def sim_cosine(prefs, p1, p2, weight):
         r = (num/den)
     return r
 
+def prefs_to_2D_list(prefs):
+    '''
+    Convert prefs dictionary into 2D list used as input for the MF class
+    
+    Parameters: 
+        prefs: user-item matrix as a dicitonary (dictionary)
+        
+    Returns: 
+        ui_matrix: (list) contains user-item matrix as a 2D list
+        
+    '''
+    ui_matrix = []
+    
+    user_keys_list = list(prefs.keys())
+    num_users = len(user_keys_list)
+    #print (len(user_keys_list), user_keys_list[:10]) # debug
+    
+    itemPrefs = transformPrefs(prefs) # traspose the prefs u-i matrix
+    item_keys_list = list(itemPrefs.keys())
+    num_items = len(item_keys_list)
+    #print (len(item_keys_list), item_keys_list[:10]) # debug
+    
+    sorted_list = True # <== set manually to test how this affects results
+    
+    if sorted_list == True:
+        user_keys_list.sort()
+        item_keys_list.sort()
+        print ('\nsorted_list =', sorted_list)
+        
+    # initialize a 2D matrix as a list of zeroes with 
+    #     num users (height) and num items (width)
+    
+    for i in range(num_users):
+        row = []
+        for j in range(num_items):
+            row.append(0.0)
+        ui_matrix.append(row)
+          
+    # populate 2D list from prefs
+    # Load data into a nested list
 
-    '''
-    Calc Spearman's correlation coefficient using scipy function
-    
-    Enter >>> help(spearmanr) # to get helpful info
-    '''
-  
-    # Get the list of mutually rated items
-    si={}
-    for item in prefs[p1]: 
-        if item in prefs[p2]: 
-            si[item]=1
-  
-    # if there are no ratings in common, return 0
-    if len(si)==0: 
-        return 0
-    
-    # Sum calculations
-    n=len(si)
-    
-    # Sums of all the preferences
-    data1 = [prefs[p1][it] for it in si]
-    data2 = [prefs[p2][it] for it in si]
-    
-    len1 = len(data1)
-    len2 = len(data2)    
-    
-    coef, p = spearmanr(data1, data2)
-    #print('Spearmans correlation coefficient: %.3f' % coef)
-    
-    if str(coef) == 'nan':
-        return 0
-    
-    # interpret the significance
-    '''
-    alpha = 0.05
-    if p > alpha:
-        print('Samples are uncorrelated (fail to reject H0) p=%.3f' % p)
-    else:
-        print('Samples are correlated (reject H0) p=%.3f' % p)   
-    
-    '''
-    if n < weight and weight != 1:
-        coef = coef*(n/weight)
+    for user in prefs:
+        for item in prefs[user]:
+            user_idx = user_keys_list.index(user)
+            movieid_idx = item_keys_list.index(item) 
+            
+            try: 
+                # make it a nested list
+                ui_matrix[user_idx][movieid_idx] = prefs [user][item] 
+            except Exception as ex:
+                print (ex)
+                print (user_idx, movieid_idx)   
+                
+    # return 2D user-item matrix
+    return ui_matrix
 
-    return coef
+def to_array(prefs):
+    ''' convert prefs dictionary into 2D list '''
+    R = prefs_to_2D_list(prefs)
+    R = np.array(R)
+    print ('to_array -- height: %d, width: %d' % (len(R), len(R[0]) ) )
+    return R
+
+def to_string(features):
+    ''' convert features np.array into list of feature strings '''
+    
+    feature_str = []
+    for i in range(len(features)):
+        row = ''
+        for j in range(len (features[0])):
+            row += (str(features[i][j]))
+        feature_str.append(row)
+    print ('to_string -- height: %d, width: %d' % (len(feature_str), len(feature_str[0]) ) )
+    return feature_str
+
+def to_docs(features_str, genres):
+    ''' convert feature strings to a list of doc strings for TFIDF '''
+    
+    feature_docs = []
+    for doc_str in features_str:
+        row = ''
+        for i in range(len(doc_str)):
+            if doc_str[i] == '1':
+                row += (genres[i] + ' ') # map the indices to the actual genre string
+        feature_docs.append(row.strip()) # and remove that pesky space at the end
+        
+    print ('to_docs -- height: %d, width: varies' % (len(feature_docs) ) )
+    return feature_docs
+
+def cosine_sim(docs):
+    ''' Perofmrs cosine sim calcs on features list, aka docs in TF-IDF world
+    
+        Parameters:
+        -- docs: list of item features
+     
+        Returns:   
+        -- list containing cosim_matrix: item_feature-item_feature cosine similarity matrix 
+    
+    
+    '''
+    
+    print()
+    print('## Cosine Similarity calc ##')
+    print()
+    print('Documents:', docs[:10])
+    
+    print()
+    print ('## Count and Transform ##')
+    print()
+    
+    # get the TFIDF vectors
+    tfidf_vectorizer = TfidfVectorizer() # orig
+    tfidf_matrix = tfidf_vectorizer.fit_transform(docs)
+    #print (tfidf_matrix.shape, type(tfidf_matrix)) # debug
+
+    
+    print()
+    print('Document similarity matrix:')
+    cosim_matrix = cosine_similarity(tfidf_matrix[0:], tfidf_matrix)
+    print (type(cosim_matrix), len(cosim_matrix))
+    print()
+    print(cosim_matrix[0:6])
+    print()
+    
+    '''
+    print('Examples of similarity angles')
+    if tfidf_matrix.shape[0] > 2:
+        for i in range(6):
+            cos_sim = cosim_matrix[1][i] #(cosine_similarity(tfidf_matrix[0:1], tfidf_matrix))[0][i] 
+            if cos_sim > 1: cos_sim = 1 # math precision creating problems!
+            angle_in_radians = math.acos(cos_sim)
+            print('Cosine sim: %.3f and angle between documents 2 and %d: ' 
+                  % (cos_sim, i+1), end=' ')
+            print ('%.3f degrees, %.3f radians' 
+                   % (math.degrees(angle_in_radians), angle_in_radians))
+    '''
+    
+    return cosim_matrix
+
+def movie_to_ID(movies):
+    ''' converts movies mapping from "id to title" to "title to id" '''
+
+    mov_to_id = {}
+
+    for id in movies:
+        mov_to_id[movies[id]] = id
+
+    return mov_to_id
+
+def get_TFIDF_recommendations(prefs,cosim_matrix,user, SIG_THRESHOLD, weight, movie_title_to_id):
+    '''
+        Calculates recommendations for a given user 
+        Parameters:
+        -- prefs: dictionary containing user-item matrix
+        -- cosim_matrix: list containing item_feature-item_feature cosine similarity matrix 
+        -- user: string containing name of user requesting recommendation
+        -- SIG_THRESHOLD: neighborhood similarity threshold
+        -- movie_title_to_id: dictionary that maps movie title to movieid        
+        Returns:
+        -- predictions: A list of recommended items with 0 or more tuples, 
+           each tuple contains (predicted rating, item name).
+           List is sorted, high to low, by predicted rating.
+           An empty list is returned when no recommendations have been calc'd.
+        
+    '''
+    
+    # find more details in Final Project Specification
+    predictions = []
+    items_to_rate = []
+
+    for item, itemID in movie_title_to_id.items():
+        if item not in prefs[user].keys():
+            items_to_rate.append((item, int(itemID) - 1))
+    
+    for item,itemID in items_to_rate:
+        den = 0
+        num = 0
+
+        for mov, rating in prefs[user].items():
+            cossim = cosim_matrix[int(movie_title_to_id[mov])-1][itemID]
+            if cossim > SIG_THRESHOLD:
+                num += (cossim * rating)
+                den += cossim
+        
+        if den != 0:
+            predictions.append((num/den,item))
+    
+    predictions.sort(reverse = True)
+
+    return predictions
+
+def single_TFIDF_rec(prefs,cosim_matrix,user, SIG_THRESHOLD, movie_title_to_id, item):
+        '''
+        Calculates recommendations for a given user 
+        Parameters:
+        -- prefs: dictionary containing user-item matrix
+        -- cosim_matrix: list containing item_feature-item_feature cosine similarity matrix 
+        -- user: string containing name of user requesting recommendation
+        -- SIG_THRESHOLD: neighborhood similarity threshold
+        -- movie_title_to_id: dictionary that maps movie title to movieid 
+        -- item: item that requires recommendation for a specific user       
+        Returns:
+        -- ranknigs: A list of recommended items with 0 or more tuples, 
+           each tuple contains (predicted rating, item name).
+           List is sorted, high to low, by predicted rating.
+           An empty list is returned when no recommendations have been calc'd.
+        '''
+        predictions = []
+        items_to_rate = []
+
+        for title, itemID in movie_title_to_id.items():
+            if title == item:
+                items_to_rate.append((item, int(itemID) - 1))
+        
+        for item,itemID in items_to_rate:
+            den = 0
+            num = 0
+
+            for mov, rating in prefs[user].items():
+                cossim = cosim_matrix[int(movie_title_to_id[mov])-1][itemID]
+                if cossim > SIG_THRESHOLD:
+                    num += (cossim * rating)
+                    den += cossim
+            
+            if den != 0:
+                predictions.append((num/den,item))
+        
+        predictions.sort(reverse = True)
+
+        return predictions
+def similarity_histogram(sim_matrix):
+
+    n = np.shape(sim_matrix)[0]
+    len_sims = n*(n-1)//2
+    all_sims = []
+    print(sim_matrix)
+
+    for r in range(n):
+        for c in range(r):
+            sim = sim_matrix[r][c]
+            if sim > SIG_THRESHOLD: 
+                all_sims.append(sim)
+       
+    mean = np.mean(all_sims)
+    std = np.std(all_sims)
+    print("Mean = %f" % mean )
+    print("STD = %f " % std)
+    print(mean - std, mean+std)
+
+    # 0, mean+-std, 0.1, 0.3 
+
+    bins = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    print("Plotting Histogram...")
+    plt.hist(all_sims, facecolor='blue', alpha = 0.75)
+    plt.title("Ratings Histogram")
+    #plt.xticks(np.arange(1,6, step=1))
+    #plt.yticks(np.arange(0, 19, step=2))
+    plt.xlabel('Similarity')
+    plt.ylabel('Number of Instances')
+    plt.grid()
+    plt.show()
+
+def to_array(prefs):
+    ''' convert prefs dictionary into 2D list '''
+    R = prefs_to_2D_list(prefs)
+    R = np.array(R)
+    print ('to_array -- height: %d, width: %d' % (len(R), len(R[0]) ) )
+    return R 
+
 
 def getRecommendations(prefs,person, similarity=sim_pearson):
     '''
@@ -1167,6 +1398,37 @@ def get_ii_cf_matrix(sim):
         print("User-based similarity matrix not computed, run SIMU command first")
         return None
     return itemsim
+def loo_cv_sim_tfidf(prefs, sim_matrix, SIG_THRESHOLD, movie_to_id):
+    mse_error_list, mae_error_list = [], []
+    i = 0
+    start_time = timeit.default_timer()
+    temp = copy.deepcopy(prefs)
+    for user in prefs.keys():
+        i += 1
+        # if i%50 == 0:
+        #     print("%d / %d" % (i, len(prefs.keys())))
+        for item in list(prefs[user].keys()):
+            #actual = prefs[user][item]
+            actual = temp[user].pop(item) # remove item 
+            recs = single_TFIDF_rec(temp, sim_matrix, user, SIG_THRESHOLD, movie_to_id, item) # get recommendation
+            temp[user][item] = actual # restore item]
+            for rec in recs: 
+                
+                if rec[1] == item: 
+                    prediction = rec[0]
+                    mse_error = (prediction - actual) **2 
+                    mae_error = np.abs(prediction - actual)
+                    mse_error_list.append(mse_error)
+                    mae_error_list.append(mae_error)
+                    
+
+    if len(mse_error_list) == 0:
+        return 0, 0, 0, []
+    mse = sum(mse_error_list)/len(mse_error_list)
+    mae = sum(mae_error_list)/len(mae_error_list)
+    rmse = math.sqrt(sum(mse_error_list)/len(mse_error_list))
+
+    return mse, mae, rmse, mse_error_list
 
 def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh):
     """
@@ -1306,12 +1568,23 @@ def main():
             print()
             file_dir = 'data/ml-100k/' # path from current directory
             datafile = 'u.data'  # ratings file
-            itemfile = 'u.item'  # movie titles file            
+            itemfile = 'u.item'  # movie titles file    
+            genrefile = 'u.genre' # movie genre file        
             print ('Reading "%s" dictionary from file' % datafile)
             prefs = from_file_to_dict(path, file_dir+datafile, file_dir+itemfile)
             print('Number of users: %d\nList of users [0:10]:' 
                       % len(prefs), list(prefs.keys())[0:10] )  
-
+            movies, genres, features = from_file_to_2D(path, file_dir+genrefile, file_dir+itemfile)
+            print('Number of users: %d\nList of users [0:10]:' 
+                  % len(prefs), list(prefs.keys())[0:10] ) 
+            print ('Number of distinct genres: %d, number of feature profiles: %d' 
+                   % (len(genres), len(features)))
+            print('genres')
+            print(genres)
+            print('features')
+            print(features)
+            ready = False
+        
         elif file_io == 'D' or file_io == 'd':
             print()
             if len(prefs) > 0:            
@@ -1607,7 +1880,10 @@ def main():
                     sim = sim_distance
                     algo = ext_getRecommendedItems
                     mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
-                
+                elif recAlgo == 'tfidf':
+                    sim_matrix = cosim_matrix
+                    
+                    mse, mae, rmse, error_list = loo_cv_sim_tfidf(prefs, sim_matrix, SIG_THRESHOLD, movie_to_ID(movies))
                 print('%s-based LOO_CV_SIM Evaluation:' % recAlgo)
                 
                 coverage = len(error_list)/(len(prefs)*len(prefs))
@@ -1824,9 +2100,30 @@ def main():
                 else:
                     print ('Empty test/train arrays, run the T command!')
                     print() 
-        
+        elif file_io == 'TFIDF' or file_io == 'tfidf':
+                R = to_array(prefs)
+                feature_str = to_string(features)                 
+                feature_docs = to_docs(feature_str, genres)
+                
+                print(R[:3][:5])
+                print()
+                print('features')
+                print(features[0:5])
+                print()
+                print('feature docs')
+                print(feature_docs[0:5]) 
+                cosim_matrix = cosine_sim(feature_docs)
+                print()
+                print('cosine sim matrix')
+                print (type(cosim_matrix), len(cosim_matrix))
+                print()
+                # similarity_histogram(cosim_matrix)
+                #print(single_TFIDF_rec(prefs,cosim_matrix, "340", SIG_THRESHOLD, movie_to_ID(movies), 'Die Hard 2 (1990)'))
+                ready = True
+                recAlgo = 'tfidf'
+
         elif file_io == 'RECS' or file_io == 'recs': 
-            user = input("Enter user: ")
+            user = input('Enter userid (for ml-100k) or return to quit: ')
             n = 5
             if ready: 
                 if recAlgo == "item-based-pearson":
@@ -1861,12 +2158,20 @@ def main():
                     user_preds.sort()
                     user_preds = np.flip(user_preds)
                     recommendation = user_preds[:n]
+                elif recAlgo == "tfidf":
+                    sim_matrix = cosim_matrix
+                    recommendation = get_TFIDF_recommendations(prefs, sim_matrix, user, SIG_THRESHOLD, movie_to_ID(movies))[:n]
+                
+
+
                 print("Top %d Recommendations from %s are: " % (n,recAlgo))
                 print(recommendation)
+            
+
             else: 
                 print("Similarity matrix not ready. ")
                 print()
-
+        
         # elif file_io == 'exp' or file_io == 'EXP':
         #     results = pd.DataFrame(columns=["Algorithm", "Sim. Method", "Sig. Weighting", "Sim. Threshold", "MSE", "MAE", "RMSE", "len(SE list)"])
         #     n = 100

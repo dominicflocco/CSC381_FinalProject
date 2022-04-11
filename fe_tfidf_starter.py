@@ -305,7 +305,7 @@ def movie_to_ID(movies):
 
     return mov_to_id
 
-def get_TFIDF_recommendations(prefs,cosim_matrix,user, SIG_THRESHOLD, movie_title_to_id):
+def get_TFIDF_recommendations(prefs, cosim_matrix, user, SIG_THRESHOLD, movie_title_to_id):
     '''
         Calculates recommendations for a given user 
         Parameters:
@@ -495,7 +495,7 @@ def main():
             prefs = from_file_to_dict(path, file_dir+datafile, file_dir+itemfile)
             movies, genres, features = from_file_to_2D(path, file_dir+genrefile, file_dir+itemfile)
             ##
-
+            
             ##
             print('Number of users: %d\nList of users [0:10]:' 
                   % len(prefs), list(prefs.keys())[0:10] ) 
