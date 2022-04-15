@@ -10,6 +10,7 @@ CSC381 Programmer/Researcher: Dominic Flocco
 
 '''
 
+#from curses.ascii import SI
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -338,6 +339,7 @@ def data_stats(prefs, filename):
     plt.grid()
     plt.show()
     plt.close()
+
 def from_file_to_2D(path, genrefile, itemfile):
     ''' Load feature matrix from specified file 
         Parameters:
@@ -589,8 +591,6 @@ def sim_distance(prefs,person1,person2, weight):
 
     return sim
     
-
-
 def sim_cosine(prefs, p1, p2, weight):
     '''
     Info:
@@ -861,6 +861,7 @@ def single_TFIDF_rec(prefs,cosim_matrix,user, SIG_THRESHOLD, movie_title_to_id, 
         predictions.sort(reverse = True)
 
         return predictions
+
 def similarity_histogram(sim_matrix):
 
     n = np.shape(sim_matrix)[0]
@@ -899,7 +900,6 @@ def to_array(prefs):
     R = np.array(R)
     print ('to_array -- height: %d, width: %d' % (len(R), len(R[0]) ) )
     return R 
-
 
 def getRecommendations(prefs,person, similarity=sim_pearson):
     '''
@@ -1374,7 +1374,6 @@ def get_all_II_recs(prefs, itemsim, sim_method, num_users=10, top_N=5):
         if i >= num_users: 
             break
 
-
 def get_uu_cf_matrix(sim):
 
     if sim == "pearson": 
@@ -1398,6 +1397,126 @@ def get_ii_cf_matrix(sim):
         print("User-based similarity matrix not computed, run SIMU command first")
         return None
     return itemsim
+
+def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie_title_to_id, weight, SIG_THRESHOLD):
+    '''
+    Generates hybrid recommendations for a specified user
+
+    Parameters:
+    -- prefs: dictionary containing user-item matrix
+    -- cosim_matrix: : pre-computed cosine similarity matrix from TF-IDF command
+    -- itemsim: item-item similarity dictionary generated frm SIM command
+    -- user: string containing name of user requesting recommendation
+    -- movie: rated movie
+    -- movie_title_to_id: dictionary that maps movie title to movieid
+    -- weight: weight to apply to the item-item similarity
+    -- SIG_THRESHOLD: neighborhood similarity threshold
+    
+    Returns:
+    -- predictions: A list of recommended items with 0 or more tuples,
+        each tuple contains (predicted rating, item name).
+        List is sorted, high to low, by predicted rating.
+        An empty list is returned when no recommendations have been calc'd. 
+    '''
+
+    predictions = []
+    items_to_rate = []
+
+    matrix2 = copy.copy(cosim_matrix)
+    movie2 = movie_to_ID(movies)
+
+    #converts similarity dictionary to a matrix
+    for i in itemsim:
+        location1 = int(movie_title_to_id[i]) - 1
+        for j in range(len(itemsim[i])):
+            location2 = int(movie2[itemsim[i][j][1]]) - 1
+            matrix2[location1][location2] = itemsim[i][j][0]
+            if i == movie2[itemsim[i][j][1]]:
+                matrix2[location1][location2] = 1
+    
+    for item, itemID in movie_title_to_id.items():
+        if item not in prefs[user].keys():
+            items_to_rate.append((item, int(itemID)-1))
+
+    for item, itemID in items_to_rate:
+        den = 0
+        num = 0
+        for ratedMov, rating in prefs[user].items():
+            i = cosim_matrix[int(movie_title_to_id[ratedMov])-1][itemID]
+            j = matrix2[int(movie_title_to_id[ratedMov])-1][itemID]
+            j = j * float(weight)
+            #if cosim is 0, use item-item sim multiplied by hybrid weight
+            if i == 0 and j>float(SIG_THRESHOLD):
+                num+= (j*rating)
+                den+=j
+            elif i>float(SIG_THRESHOLD):
+                num+= (i*rating)
+                den+=i
+        if den!=0:
+            predictions.append((num/den,item))
+    predictions.sort(reverse=True)
+    return predictions
+    
+def single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, item, movie_title_to_id, weight, SIG_THRESHOLD):
+    '''
+    Generates hybrid recommendations for a specified user
+
+    Parameters:
+    -- prefs: dictionary containing user-item matrix
+    -- cosim_matrix: : pre-computed cosine similarity matrix from TF-IDF command
+    -- itemsim: item-item similarity dictionary generated frm SIM command
+    -- user: string containing name of user requesting recommendation
+    -- movies: movies in the dataset
+    -- item: specific item to generate prediction
+    -- movie_title_to_id: dictionary that maps movie title to movieid
+    -- weight: weight to apply to the item-item similarity
+    -- SIG_THRESHOLD: neighborhood similarity threshold
+    
+    Returns:
+    -- predictions: A list of recommended items with 0 or more tuples,
+        each tuple contains (predicted rating, item name).
+        List is sorted, high to low, by predicted rating.
+        An empty list is returned when no recommendations have been calc'd. 
+    '''
+
+    items_to_rate = []
+    items_to_rate.append((item, (int(movie_title_to_id[item])-1)))
+
+    predictions = []
+
+    matrix2 = copy.copy(cosim_matrix)
+    movie2 = movie_to_ID(movies)
+
+    #converts similarity dictionary to a matrix
+    for i in itemsim:
+        location1 = int(movie_title_to_id[i]) - 1
+        for j in range(len(itemsim[i])):
+            location2 = int(movie2[itemsim[i][j][1]]) - 1
+            matrix2[location1][location2] = itemsim[i][j][0]
+            if i == movie2[itemsim[i][j][1]]:
+                matrix2[location1][location2] = 1
+    
+    for mov,movId in items_to_rate:
+        den = 0
+        num = 0
+        for ratedMovie,rating in prefs[user].items():
+            i = cosim_matrix[int(movie_title_to_id[ratedMovie])-1][movId]
+            j = matrix2[int(movie_title_to_id[ratedMovie])-1][movId]
+            j = j * float(weight)
+            #if cosim is 0, use item-item sim multiplied by hybrid weight
+            if i == 0 and j>float(SIG_THRESHOLD):
+                num+= (j*rating)
+                den+=j
+            elif i > float(SIG_THRESHOLD):
+                num+= (i*rating)
+                den+=i
+        if den!=0:
+            predictions.append((num/den,item))
+
+    predictions.sort(reverse=True)
+
+    return predictions
+
 def loo_cv_sim_tfidf(prefs, sim_matrix, SIG_THRESHOLD, movie_to_id):
     mse_error_list, mae_error_list = [], []
     i = 0
@@ -1787,6 +1906,8 @@ def main():
                     # for item in itemsim:
                     #     print(item, itemsim[item])
                 print()
+    
+               
                 
             else:
                 print ('Empty dictionary, R(ead) in some data!') 
@@ -2100,6 +2221,7 @@ def main():
                 else:
                     print ('Empty test/train arrays, run the T command!')
                     print() 
+        
         elif file_io == 'TFIDF' or file_io == 'tfidf':
                 R = to_array(prefs)
                 feature_str = to_string(features)                 
@@ -2118,18 +2240,20 @@ def main():
                 print (type(cosim_matrix), len(cosim_matrix))
                 print()
                 # similarity_histogram(cosim_matrix)
-                #print(single_TFIDF_rec(prefs,cosim_matrix, "340", SIG_THRESHOLD, movie_to_ID(movies), 'Die Hard 2 (1990)'))
+                print(single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, '340', movies, 'Once Upon a Time in the West (1969)', movie_to_ID(movies), 1, SIG_THRESHOLD))               
                 ready = True
                 recAlgo = 'tfidf'
 
         elif file_io == 'RECS' or file_io == 'recs': 
             user = input('Enter userid (for ml-100k) or return to quit: ')
+            #I think we need another input here to specify the algorithm
+            #recAlgo = input("Enter ALS or SGD orDeep Learning or TFIDF or Hybrid: "")
             n = 5
             if ready: 
                 if recAlgo == "item-based-pearson":
                     sim_matrix = get_ii_cf_matrix("pearson")
                     
-                    thresh = 0.0
+                    thresh = 0.0  
                     recommendation = getRecommendedItems(prefs, user, sim_matrix, weight, thresh)[:n]
                 elif recAlgo == "item-based-distance":
                     
