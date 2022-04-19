@@ -11,6 +11,25 @@ from keras.models import Model
 from sympy import evaluate
 warnings.filterwarnings('ignore')
 
+class NeuMF():
+    def __init__(self, 
+                dataset, 
+                test_size=0.2,
+                n_factors=5, 
+                lr=1e-3, 
+                n_layers=3):
+        
+        self.dataset = dataset 
+        
+        self.n_users, self.n_items = len(pd.unique(dataset["user_id"])), len(pd.unique(dataset["item_id"]))
+        self.n_factors = n_factors
+        self.lr = lr
+        self.n_layers = n_layers
+        self.test_size = test_size
+        self.model = None
+        
+    def build_model()
+    
 
 def read_data(filename):
     header = ['user_id','item_id','rating','timestamp']
@@ -24,20 +43,23 @@ def build_MLP(dataset, train, test):
     n_items = len(pd.unique(dataset["item_id"]))
     
     movie_input = Input(shape=[1], name="Movie-Input")
-    movie_embedding = Embedding(n_items+1, 5, name="Movie-Embedding")(movie_input)
+    movie_embedding = Embedding(n_items+1, n_factors, name="Movie-Embedding")(movie_input)
     movie_vec = Flatten(name="Flatten-Books")(movie_embedding)
     # creating user embedding path
     user_input = Input(shape=[1], name="User-Input")
-    user_embedding = Embedding(n_users+1, 5, name="User-Embedding")(user_input)
+    user_embedding = Embedding(n_users+1, n_factors, name="User-Embedding")(user_input)
     user_vec = Flatten(name="Flatten-Users")(user_embedding)
     # concatenate features
     conc = Concatenate()([movie_vec, user_vec])
     # add fully-connected-layers
+    
     fc1 = Dense(128, activation='relu')(conc)
     fc2 = Dense(32, activation='relu')(fc1)
     out = Dense(1)(fc2)
     # Create model and compile it
     model2 = Model([user_input, movie_input], out)
+    compile(optimizer=Adam(learning_rate=lr), loss=MeanSquaredError())
+
     model2.compile('adam', 'mean_squared_error')
 
     return model2  
