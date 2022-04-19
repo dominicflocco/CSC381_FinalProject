@@ -44,6 +44,15 @@ UBD_SIG_WEIGHT = 25
 UBP_SIG_THRESHOLD = 0.3
 UBP_SIG_WEIGHT = 1
 
+ITERATIONS = 20
+# MF ALS 
+ALS_FACTORS = 2
+ALS_REG = 0.1
+# MF SGD 
+SGD_FACTORS = 200
+SGD_LEARNING_RATE = 0.02
+SGD_REG = 0.02
+
 
 
 def from_file_to_dict(path, datafile, itemfile):
@@ -1442,13 +1451,13 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
     movie2 = movie_to_ID(movies)
 
     #converts similarity dictionary to a matrix
-    for i in itemsim:
-        location1 = int(movie_title_to_id[i]) - 1
-        for j in range(len(itemsim[i])):
-            location2 = int(movie2[itemsim[i][j][1]]) - 1
-            matrix2[location1][location2] = itemsim[i][j][0]
-            if i == movie2[itemsim[i][j][1]]:
-                matrix2[location1][location2] = 1
+    # for i in itemsim:
+    #     location1 = int(movie_title_to_id[i]) - 1
+    #     for j in range(len(itemsim[i])):
+    #         location2 = int(movie2[itemsim[i][j][1]]) - 1
+    #         matrix2[location1][location2] = itemsim[i][j][0]
+    #         if i == movie2[itemsim[i][j][1]]:
+    #             matrix2[location1][location2] = 1
     
     for item, itemID in movie_title_to_id.items():
         if item not in prefs[user].keys():
@@ -1459,7 +1468,7 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
         num = 0
         for ratedMov, rating in prefs[user].items():
             i = cosim_matrix[int(movie_title_to_id[ratedMov])-1][itemID]
-            j = matrix2[int(movie_title_to_id[ratedMov])-1][itemID]
+            j = itemsim[int(movie_title_to_id[ratedMov])-1][itemID]
             j = j * float(weight)
             #if cosim is 0, use item-item sim multiplied by hybrid weight
             if i == 0 and j>float(item_thresh):
@@ -1712,6 +1721,18 @@ def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh):
     
     
     return mse, mae, rmse, mse_error_list
+def get_mf_recommendations(MF, movies, user):
+
+    predictions = []
+    for i in range(1,MF.item_vecs.shape[0]):
+        rating = MF.predict(int(user), i)
+        item = movies[str(i)]
+        predictions.append((rating, item))
+    
+    predictions.sort(reverse=True)
+    return predictions
+
+    
 
 def main():
     ''' User interface for Python console '''
@@ -1774,11 +1795,14 @@ def main():
             data_folder = '/data/ml-100k/' # for ml-100k                   
             #print('\npath: %s\n' % path_name + data_folder) # debug: print path info
             names = ['user_id', 'item_id', 'rating', 'timestamp'] # column headings
-    
+            file_dir = 'data/ml-100k/' # path from current directory
+            datafile = 'u.data'  # ratings file
+            itemfile = 'u.item'  # movie titles file    
+            genrefile = 'u.genre' # movie genre file        
             #Create pandas dataframe
             df = pd.read_csv(path + data_folder + 'u.data', sep='\t', names=names) # for ml-100k
             ratings = file_info(df)
-            
+            movies, genres, features = from_file_to_2D(path, file_dir+genrefile, file_dir+itemfile)
             test_train_done = False
             print()
             print('Test and Train arrays are empty!')
@@ -2080,7 +2104,8 @@ def main():
                 
             else:
                 print ('Empty dictionary, R(ead) in some data!') 
-       
+
+        
         elif file_io == 'LCVSIM' or file_io == 'lcvsim':
             print()
             if ready: 
@@ -2089,6 +2114,7 @@ def main():
                     sim = sim_pearson
                     algo = ext_getRecommendationsSim
                     mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    #num_ratings = len(prefs)
                 elif recAlgo == "user-based-distance":
                     sim_matrix = get_uu_cf_matrix("distance")
                     sim = sim_distance
@@ -2170,40 +2196,40 @@ def main():
                     if len(ratings) < 10: ## for critics
                         print('Sample for critics .. ')
                         iter_array = [1, 2, 5, 10, 20]
-                        MF_ALS = ExplicitMF(train, learning='als', n_factors=2, user_fact_reg=1, item_fact_reg=1, max_iters=max(iter_array), verbose=True)
+                        MF_ALS = ExplicitMF(train, learning='als', n_factors=ALS_FACTORS, user_fact_reg=ALS_REG, item_fact_reg=ALS_REG, max_iters=max(iter_array), verbose=True)
                         print('[2,1,20]')
                     
                     elif len(ratings) < 1000: ## for ml-100k
                         print('Sample for ml-100k .. ')
                         iter_array = [1, 2, 5 , 10, 20, 50] #, 100] #, 200]
-                        MF_ALS = ExplicitMF(train, learning='als', n_factors=20, user_fact_reg=.01, item_fact_reg=.01, max_iters=max(iter_array), verbose=True) 
+                        MF_ALS = ExplicitMF(train, learning='als', n_factors=ALS_FACTORS, user_fact_reg=ALS_REG, item_fact_reg=ALS_REG, max_iters=max(iter_array), verbose=True)
                         print('[20,0.01,50]')
                     
                     elif len(ratings) < 10000: ## for ml-1m
                         print('Sample for ml-1M .. ')
                         iter_array = [1, 2, 5, 10] 
-                        MF_ALS = ExplicitMF(train, learning='als', n_factors=20, user_fact_reg=.1, item_fact_reg=.1, max_iters=max(iter_array), verbose=True) 
+                        MF_ALS = ExplicitMF(train, learning='als', n_factors=ALS_FACTORS, user_fact_reg=ALS_REG, item_fact_reg=ALS_REG, max_iters=max(iter_array), verbose=True)
                         print('[20,0.1,10]')
                         
-                    parms = input('Y or y to use these parameters or Enter to modify: ')# [2,0.01,10,False]
-                    if parms == 'Y' or parms == 'y':
-                        pass
-                    else:
-                        parms = eval(input('Enter new parameters as a list: [n_factors, reg, iters]: '))
+                    #parms = input('Y or y to use these parameters or Enter to modify: ')# [2,0.01,10,False]
+                    # if parms == 'Y' or parms == 'y':
+                    #     pass
+                    # else:
+                        # # parms = eval(input('Enter new parameters as a list: [n_factors, reg, iters]: '))
                         
-                        # instantiate with this set of parms
-                        MF_ALS = ExplicitMF(train,learning='als', 
-                                            n_factors=parms[0], 
-                                            user_fact_reg=parms[1], 
-                                            item_fact_reg=parms[1])
+                        # # instantiate with this set of parms
+                        # MF_ALS = ExplicitMF(train,learning='als', 
+                        #                     n_factors=parms[0], 
+                        #                     user_fact_reg=parms[1], 
+                        #                     item_fact_reg=parms[1])
                        
-                        # set up the iter_array for this run to pass on
-                        orig_iter_array = [1, 2, 5, 10, 20, 50, 100, 200]
-                        i_max = parms[2]
-                        index = orig_iter_array.index(i_max)
-                        iter_array = []
-                        for i in range(0, index+1):
-                            iter_array.append(orig_iter_array[i])
+                        # # set up the iter_array for this run to pass on
+                        # orig_iter_array = [1, 2, 5, 10, 20, 50, 100, 200]
+                        # i_max = parms[2]
+                        # index = orig_iter_array.index(i_max)
+                        # iter_array = []
+                        # for i in range(0, index+1):
+                        #     iter_array.append(orig_iter_array[i])
                             
                     # run the algo and plot results
                     MF_ALS.calculate_learning_curve(iter_array, test) 
@@ -2231,10 +2257,10 @@ def main():
                         print('Sample for critics .. ')
                         iter_array = [1, 2, 5, 10, 20]                     
                         MF_SGD = ExplicitMF(train, 
-                                            n_factors=2, 
+                                            n_factors=SGD_FACTORS, 
                                             learning='sgd', 
-                                            sgd_alpha=0.075,
-                                            sgd_beta=0.01, 
+                                            sgd_alpha=SGD_LEARNING_RATE,
+                                            sgd_beta=SGD_REG, 
                                             max_iters=max(iter_array), 
                                             sgd_random=False)
                         print('[2, 0.075, 0.01, 20]')
@@ -2245,10 +2271,10 @@ def main():
                         print('Sample for ml-100k .. ')
                         iter_array = [1, 2, 5, 10, 20]                     
                         MF_SGD = ExplicitMF(train, 
-                                            n_factors=2, 
+                                             n_factors=SGD_FACTORS, 
                                             learning='sgd', 
-                                            sgd_alpha=0.02,
-                                            sgd_beta=0.2, 
+                                            sgd_alpha=SGD_LEARNING_RATE,
+                                            sgd_beta=SGD_REG, 
                                             max_iters=max(iter_array), 
                                             sgd_random=False, verbose=True)
                         print('[2, 0.02, 0.2, 20]')
@@ -2278,12 +2304,12 @@ def main():
                     elif len(ratings) < 10000:
                        # Use these parameters for ml-1m
                         print('Sample for ml-1m .. ')
-                        iter_array = [1, 2, 5, 10] #, 20, 50, 100]                     
+                        iter_array = [1, 2, 5, 10, 20] #, 20, 50, 100]                     
                         MF_SGD = ExplicitMF(train, 
-                                            n_factors=20, 
+                                            n_factors=SGD_FACTORS, 
                                             learning='sgd', 
-                                            sgd_alpha=0.1,
-                                            sgd_beta=0.1, 
+                                            sgd_alpha=SGD_LEARNING_RATE,
+                                            sgd_beta=SGD_REG, 
                                             max_iters=max(iter_array), 
                                             sgd_random=False, verbose=True)
                         print('[20, 0.1, 0.1, 10]') # 100]')
@@ -2304,24 +2330,25 @@ def main():
                         Elapsed train/test time 1919.23 secs
                         '''
                      
-                    parms = input('Y or y to use these parameters or Enter to modify: ')# [2,0.01,10,False]
-                    if parms == 'Y' or parms == 'y':
-                        pass
-                    else:
-                        parms = eval(input('Enter new parameters as a list: [n_factors K, learning_rate alpha, reg beta, max_iters: ')) #', random]: '))
-                        MF_SGD = ExplicitMF(train, n_factors=parms[0], 
-                                            learning='sgd', 
-                                            sgd_alpha=parms[1], 
-                                            sgd_beta=parms[2], 
-                                            max_iters=parms[3], 
-                                            sgd_random=False, verbose=True)  
+                    # parms = input('Y or y to use these parameters or Enter to modify: ')# [2,0.01,10,False]
+                    # if parms == 'Y' or parms == 'y':
+                    #     pass
+                    # else:
+                    #     parms = eval(input('Enter new parameters as a list: [n_factors K, learning_rate alpha, reg beta, max_iters: ')) #', random]: '))
+                    #     MF_SGD = ExplicitMF(train, 
+                    #                         n_factors=SGD_FACTORS, 
+                    #                         learning='sgd', 
+                    #                         sgd_alpha=SGD_LEARNING_RATE,
+                    #                         sgd_beta=SGD_REG, 
+                    #                         max_iters=max(iter_array), 
+                    #                         sgd_random=False, verbose=True)
 
-                        orig_iter_array = [1, 2, 5, 10, 20, 50, 100, 200]
-                        i_max = parms[3]
-                        index = orig_iter_array.index(i_max)
-                        iter_array = []
-                        for i in range(0, index+1):
-                            iter_array.append(orig_iter_array[i])
+                    #     orig_iter_array = [1, 2, 5, 10, 20, 50, 100, 200]
+                    #     i_max = parms[3]
+                    #     index = orig_iter_array.index(i_max)
+                    #     iter_array = []
+                    #     for i in range(0, index+1):
+                    #         iter_array.append(orig_iter_array[i])
                          
                     MF_SGD.calculate_learning_curve(iter_array, test) # start the training
                     # plot_learning_curve(iter_array, MF_SGD)    
@@ -2399,17 +2426,13 @@ def main():
                     sim_matrix = get_uu_cf_matrix("distance")
                     recommendation = getRecommendationsSim(prefs, user, sim_matrix, weight, thresh)[:n]
                 elif recAlgo == "MF_ALS":
-                    predictions = MF_ALS.predict_all()
-                    user_preds = predictions[int(user)]
-                    user_preds.sort()
-                    user_preds = np.flip(user_preds)
-                    recommendation = user_preds[:n]
+                    
+                    predictions = get_mf_recommendations(MF_ALS, movies, user)
+                    recommendation = predictions[:n]
                 elif recAlgo == "MF_SGD":
-                    predictions = MF_SGD.predict_all()
-                    user_preds = predictions[int(user)]
-                    user_preds.sort()
-                    user_preds = np.flip(user_preds)
-                    recommendation = user_preds[:n]
+                    predictions = get_mf_recommendations(MF_SGD, movies, user)
+                    
+                    recommendation = predictions[:n]
                 elif recAlgo == "tfidf":
                     sim_matrix = cosim_matrix
                     recommendation = get_TFIDF_recommendations(prefs, sim_matrix, user, TFIDF_SIG_THRESHOLD, movie_to_ID(movies))[:n]
