@@ -28,7 +28,23 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from mf_sgd_als_class import ExplicitMF
-SIG_THRESHOLD = 0.0
+
+# TFIDF 
+TFIDF_SIG_THRESHOLD = 0.0
+# Item-based distance
+IBD_SIG_THRESHOLD = 0.0
+IBD_SIG_WEIGHT = 50 
+# Item-based pearson 
+IBP_SIG_THRESHOLD = 0.0
+IBP_SIG_WEIGHT = 50
+# User-based distance 
+UBD_SIG_THRESHOLD = 0.0
+UBD_SIG_WEIGHT = 25
+# User-based pearson 
+UBP_SIG_THRESHOLD = 0.3
+UBP_SIG_WEIGHT = 1
+
+
 
 def from_file_to_dict(path, datafile, itemfile):
     ''' Load user-item matrix from specified file 
@@ -780,7 +796,7 @@ def movie_to_ID(movies):
 
     return mov_to_id
 
-def get_TFIDF_recommendations(prefs,cosim_matrix,user, SIG_THRESHOLD, weight, movie_title_to_id):
+def get_TFIDF_recommendations(prefs,cosim_matrix,user, thresh, movie_title_to_id):
     '''
         Calculates recommendations for a given user 
         Parameters:
@@ -811,7 +827,7 @@ def get_TFIDF_recommendations(prefs,cosim_matrix,user, SIG_THRESHOLD, weight, mo
 
         for mov, rating in prefs[user].items():
             cossim = cosim_matrix[int(movie_title_to_id[mov])-1][itemID]
-            if cossim > SIG_THRESHOLD:
+            if cossim > thresh:
                 num += (cossim * rating)
                 den += cossim
         
@@ -822,7 +838,7 @@ def get_TFIDF_recommendations(prefs,cosim_matrix,user, SIG_THRESHOLD, weight, mo
 
     return predictions
 
-def single_TFIDF_rec(prefs,cosim_matrix,user, SIG_THRESHOLD, movie_title_to_id, item):
+def single_TFIDF_rec(prefs,cosim_matrix,user, thresh, movie_title_to_id, item):
         '''
         Calculates recommendations for a given user 
         Parameters:
@@ -851,7 +867,7 @@ def single_TFIDF_rec(prefs,cosim_matrix,user, SIG_THRESHOLD, movie_title_to_id, 
 
             for mov, rating in prefs[user].items():
                 cossim = cosim_matrix[int(movie_title_to_id[mov])-1][itemID]
-                if cossim > SIG_THRESHOLD:
+                if cossim > thresh:
                     num += (cossim * rating)
                     den += cossim
             
@@ -872,7 +888,7 @@ def similarity_histogram(sim_matrix):
     for r in range(n):
         for c in range(r):
             sim = sim_matrix[r][c]
-            if sim > SIG_THRESHOLD: 
+            if sim > TFIDF_SIG_THRESHOLD: 
                 all_sims.append(sim)
        
     mean = np.mean(all_sims)
@@ -1246,7 +1262,7 @@ def transformPrefs(prefs):
             result[item][person]=prefs[person][item]
     return result
 
-def calculateSimilarItems(prefs, weight, n=100,similarity=sim_pearson):
+def calculateSimilarItems(prefs, weight, n=2000,similarity=sim_pearson):
     '''
         Creates a dictionary of items showing which other items they are most 
         similar to. 
@@ -1398,7 +1414,7 @@ def get_ii_cf_matrix(sim):
         return None
     return itemsim
 
-def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie_title_to_id, weight, SIG_THRESHOLD):
+def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie_title_to_id, weight, item_thresh):
     '''
     Generates hybrid recommendations for a specified user
 
@@ -1446,10 +1462,10 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
             j = matrix2[int(movie_title_to_id[ratedMov])-1][itemID]
             j = j * float(weight)
             #if cosim is 0, use item-item sim multiplied by hybrid weight
-            if i == 0 and j>float(SIG_THRESHOLD):
+            if i == 0 and j>float(item_thresh):
                 num+= (j*rating)
                 den+=j
-            elif i>float(SIG_THRESHOLD):
+            elif i>float(item_thresh):
                 num+= (i*rating)
                 den+=i
         if den!=0:
@@ -1457,7 +1473,7 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
     predictions.sort(reverse=True)
     return predictions
     
-def single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, item, movie_title_to_id, weight, SIG_THRESHOLD):
+def single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, item, movie_title_to_id, weight, item_thresh):
     '''
     Generates hybrid recommendations for a specified user
 
@@ -1488,26 +1504,26 @@ def single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, it
     movie2 = movie_to_ID(movies)
 
     #converts similarity dictionary to a matrix
-    for i in itemsim:
-        location1 = int(movie_title_to_id[i]) - 1
-        for j in range(len(itemsim[i])):
-            location2 = int(movie2[itemsim[i][j][1]]) - 1
-            matrix2[location1][location2] = itemsim[i][j][0]
-            if i == movie2[itemsim[i][j][1]]:
-                matrix2[location1][location2] = 1
+    # for i in itemsim:
+    #     location1 = int(movie_title_to_id[i]) - 1
+    #     for j in range(len(itemsim[i])):
+    #         location2 = int(movie2[itemsim[i][j][1]]) - 1
+    #         matrix2[location1][location2] = itemsim[i][j][0]
+    #         if i == movie2[itemsim[i][j][1]]:
+    #             matrix2[location1][location2] = 1
     
     for mov,movId in items_to_rate:
         den = 0
         num = 0
         for ratedMovie,rating in prefs[user].items():
             i = cosim_matrix[int(movie_title_to_id[ratedMovie])-1][movId]
-            j = matrix2[int(movie_title_to_id[ratedMovie])-1][movId]
+            j = itemsim[int(movie_title_to_id[ratedMovie])-1][movId]
             j = j * float(weight)
             #if cosim is 0, use item-item sim multiplied by hybrid weight
-            if i == 0 and j>float(SIG_THRESHOLD):
+            if i == 0 and j>float(item_thresh):
                 num+= (j*rating)
                 den+=j
-            elif i > float(SIG_THRESHOLD):
+            elif i > float(item_thresh):
                 num+= (i*rating)
                 den+=i
         if den!=0:
@@ -1516,6 +1532,32 @@ def single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, it
     predictions.sort(reverse=True)
 
     return predictions
+
+def convert_itemsim(matrix, movie, cosim_matrix, movie_title_to_id):
+    '''
+    Converts given tuple dictionary of similarities into a 2-D matrix.
+    
+    Parameters:
+    -- matrix: pre-computed item-item similarity dictionary with tuples
+    -- movie: list of movies
+    -- cosim_matrix: : pre-computed cosine similarity matrix from TF-IDF command
+    -- movie_title_to_id: dictionary that maps movie title to movieid
+    
+    Returns:
+    -- matrix2: matrix of the similarities
+    '''
+    #copies format of cosim matrix
+    matrix2 = copy.copy(cosim_matrix)
+    movie2 = movie_to_ID(movie)
+    #places each similarity to its position matching cosim
+    for i in matrix:
+        location1 = int(movie_title_to_id[i]) - 1
+        for j in range(len(matrix[i])):
+            location2 = int(movie2[matrix[i][j][1]]) - 1
+            matrix2[location1][location2] = matrix[i][j][0]
+            if i == movie2[matrix[i][j][1]]:
+                matrix2[location1][location2] = 1
+    return matrix2
 
 def loo_cv_sim_tfidf(prefs, sim_matrix, SIG_THRESHOLD, movie_to_id):
     mse_error_list, mae_error_list = [], []
@@ -1549,6 +1591,64 @@ def loo_cv_sim_tfidf(prefs, sim_matrix, SIG_THRESHOLD, movie_to_id):
 
     return mse, mae, rmse, mse_error_list
 
+def loo_cv_sim_hybrid(prefs, cosim_matrix, itemsim, movies, movie_to_id, weight, item_thresh):
+    mse_error_list, mae_error_list = [], []
+    i = 0
+    start_time = timeit.default_timer()
+    temp = copy.deepcopy(prefs)
+    itemsim = convert_itemsim(itemsim, movies, cosim_matrix, movie_to_id)
+    for user in prefs.keys():
+        i += 1
+        # if i%50 == 0:
+        #     print("%d / %d" % (i, len(prefs.keys())))
+        for item in list(prefs[user].keys()):
+            #actual = prefs[user][item]
+            actual = temp[user].pop(item) # remove item 
+            recs = single_Hybrid_Recommendations(temp, cosim_matrix, itemsim, user, movies, item, movie_to_id, weight, item_thresh) # get recommendation
+            temp[user][item] = actual # restore item]
+            for rec in recs: 
+                
+                if rec[1] == item: 
+                    prediction = rec[0]
+                    mse_error = (prediction - actual) **2 
+                    mae_error = np.abs(prediction - actual)
+                    mse_error_list.append(mse_error)
+                    mae_error_list.append(mae_error)
+                    
+
+    if len(mse_error_list) == 0:
+        return 0, 0, 0, []
+    mse = sum(mse_error_list)/len(mse_error_list)
+    mae = sum(mae_error_list)/len(mae_error_list)
+    rmse = math.sqrt(sum(mse_error_list)/len(mse_error_list))
+
+    return mse, mae, rmse, mse_error_list
+    
+def eval_mf(MF):
+
+    mse_error_list, mae_error_list = [], []
+    
+    for u in range(MF.user_vecs.shape[0]):
+        for i in range(MF.item_vecs.shape[0]):
+            actual = MF.ratings[u][i]
+            if actual != 0:
+                pred = MF.predict(u, i)
+                
+                se = (pred-actual) **2
+                error = abs(pred-actual)
+
+                mse_error_list.append(se)
+                mae_error_list.append(error)
+    
+    
+    if len(mse_error_list) == 0:
+        return 0, 0, 0, []
+    mse = sum(mse_error_list)/len(mse_error_list)
+    mae = sum(mae_error_list)/len(mae_error_list)
+    rmse = math.sqrt(sum(mse_error_list)/len(mse_error_list))
+
+    return mse, mae, rmse, mse_error_list
+    
 def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh):
     """
     Leave-One_Out Evaluation: evaluates recommender system ACCURACY
@@ -1639,6 +1739,7 @@ def main():
                         'MF-SGD(atrix factorization- Stochastic Gradient Descent)? \n'
                         'TFIDF(and cosine sim Setup)?, \n'
                         'LCVSIM(eave one out cross-validation)?, \n'
+                        'H(ybrid reccommendation setup), \n' 
                         'RECS(ecommendations -- all algos)? \n==> ')
         
         if file_io == 'R' or file_io == 'r':
@@ -1856,28 +1957,30 @@ def main():
                         sim_method = 'sim_distance'
                         recType = 'item'
                         recAlgo = "item-based-distance"
-                        weight = 50
-                        thresh = 0.0
+                        weight = IBD_SIG_WEIGHT
+                        thresh = IBD_SIG_THRESHOLD
                     elif sub_cmd == 'RP' or sub_cmd == 'rp':
                         # Load the dictionary back from the pickle file.
                         itemsim = pickle.load(open( "save_itemsim_pearson.p", "rb" ))  
                         sim_method = 'sim_pearson'
                         recType = 'item'
                         recAlgo = "item-based-pearson"
-                        weight = 50
-                        thresh = 0.0
+                        weight = IBP_SIG_WEIGHT
+                        thresh = IBP_SIG_THRESHOLD
                     elif sub_cmd == 'WD' or sub_cmd == 'wd':
                         # transpose the U-I matrix and calc item-item similarities matrix
-                        weight = 50
-                        itemsim = calculateSimilarItems(prefs, weight,similarity=sim_distance)                     
+                        weight = IBD_SIG_WEIGHT
+                        # n = len(prefs)
+                        itemsim = calculateSimilarItems(prefs, weight, similarity=sim_distance)                     
                         # Dump/save dictionary to a pickle file
                         pickle.dump(itemsim, open( "save_itemsim_distance.p", "wb" ))
                         sim_method = "sim_distance"
                         recType = 'item'
                         recAlgo = "item-based-distance"
-                        thresh = 0.0
+                        thresh = IBD_SIG_THRESHOLD
                     elif sub_cmd == 'WP' or sub_cmd == 'wp':
-                        weight = 50
+                        weight = IBP_SIG_WEIGHT
+                        # n = len(prefs)
                         # transpose the U-I matrix and calc item-item similarities matrix
                         itemsim = calculateSimilarItems(prefs, weight, similarity=sim_pearson)                     
                         # Dump/save dictionary to a pickle file
@@ -1885,7 +1988,7 @@ def main():
                         sim_method = "sim_pearson"
                         recType = 'item'
                         recAlgo = "item-based-pearson"
-                        thresh = 0.0
+                        thresh = IBP_SIG_THRESHOLD
                     else:
                         print("Sim sub-command %s is invalid, try again" % sub_cmd)
                         continue
@@ -1924,8 +2027,8 @@ def main():
                         sim_method = 'sim_distance'
                         recAlgo = "user-based-distance"
                         recType = 'user'
-                        weight = 25
-                        thresh = 0.0
+                        weight = UBD_SIG_WEIGHT
+                        thresh = UBD_SIG_THRESHOLD
 
                     elif sub_cmd == 'RP' or sub_cmd == 'rp':
                         # Load the dictionary back from the pickle file.
@@ -1933,19 +2036,19 @@ def main():
                         sim_method = 'sim_pearson'
                         recAlgo = "user-based-pearson"
                         recType = 'user'
-                        weight = 1
-                        thresh = 0.3 
+                        weight = UBP_SIG_WEIGHT
+                        thresh = UBP_SIG_THRESHOLD
 
                     elif sub_cmd == 'WD' or sub_cmd == 'wd':
                         # transpose the U-I matrix and calc user-user similarities matrix
-                        weight = 25
+                        weight = UBD_SIG_WEIGHT
                         usersim = calculateSimilarUsers(prefs, weight, n=100,similarity=sim_distance)                     
                         # Dump/save dictionary to a pickle file
                         pickle.dump(usersim, open( "save_usersim_distance.p", "wb" ))
                         recAlgo = "user-based-distance"
                         sim_method = "sim_distance"
-                        weight = 25
-                        thresh = 0.0
+                        weight = UBD_SIG_WEIGHT
+                        thresh = UBD_SIG_THRESHOLD
                     elif sub_cmd == 'WP' or sub_cmd == 'wp':
                         # transpose the U-I matrix and calc user-user similarities matrix
                         weight = 1
@@ -1954,8 +2057,8 @@ def main():
                         pickle.dump(usersim, open( "save_usersim_pearson.p", "wb" )) 
                         recAlgo = "user-based-pearson"
                         sim_method = "sim_pearson"
-                        weight = 1
-                        thresh = 0.3 
+                        weight = UBP_SIG_WEIGHT
+                        thresh = UBP_SIG_THRESHOLD 
                     else:
                         print("Simu sub-command %s is invalid, try again" % sub_cmd)
                         continue
@@ -2004,21 +2107,27 @@ def main():
                 elif recAlgo == 'tfidf':
                     sim_matrix = cosim_matrix
                     
-                    mse, mae, rmse, error_list = loo_cv_sim_tfidf(prefs, sim_matrix, SIG_THRESHOLD, movie_to_ID(movies))
+                    mse, mae, rmse, error_list = loo_cv_sim_tfidf(prefs, sim_matrix, TFIDF_SIG_THRESHOLD, movie_to_ID(movies))
+                elif recAlgo == 'hybrid':
+                    mse, mae, rmse, error_list = loo_cv_sim_hybrid(prefs, cosim_matrix, itemsim, movies, movie_to_ID(movies), weight, thresh)
+                
+                elif recAlgo == 'MF_ALS':
+                    mse, mae, rmse, error_list = eval_mf(MF_ALS)
+                elif recAlgo == 'MF_SGD':
+                    mse, mae, rmse, error_list = eval_mf(MF_SGD)
+                
                 print('%s-based LOO_CV_SIM Evaluation:' % recAlgo)
                 
-                coverage = len(error_list)/(len(prefs)*len(prefs))
+                #coverage = len(error_list)/(len(prefs)*len(prefs))
                 print('%s for ML-100K: %.5f, len(SE list): %d ' % ("MSE", mse, len(error_list)) )
                 print('%s for ML-100K: %.5f, len(SE list): %d ' % ("MAE", mae, len(error_list)) )
                 print('%s for ML-100K: %.5f, len(SE list): %d ' % ("RMSE", rmse, len(error_list)) )
-                print('%s for ML-100K: %.5f, len(SE list): %d ' % ("Coverage", rmse, len(error_list)) )
+                #print('%s for ML-100K: %.5f, len(SE list): %d ' % ("Coverage", coverage, len(error_list)) )
                 print()
                     
             else:
                 print('Run Sim(ilarity matrix) command to create/load Sim matrix!')
             
-           
-        
         elif file_io == 'T' or file_io == 't':
             if len(ratings) > 0:
                 answer = input('Generate both test and train data? Y or y, N or n: ')
@@ -2221,7 +2330,8 @@ def main():
                 else:
                     print ('Empty test/train arrays, run the T command!')
                     print() 
-        
+
+
         elif file_io == 'TFIDF' or file_io == 'tfidf':
                 R = to_array(prefs)
                 feature_str = to_string(features)                 
@@ -2240,10 +2350,28 @@ def main():
                 print (type(cosim_matrix), len(cosim_matrix))
                 print()
                 # similarity_histogram(cosim_matrix)
-                print(single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, '340', movies, 'Once Upon a Time in the West (1969)', movie_to_ID(movies), 1, SIG_THRESHOLD))               
+                # print(single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, '340', movies, 'Once Upon a Time in the West (1969)', movie_to_ID(movies), 1, SIG_THRESHOLD))               
                 ready = True
                 recAlgo = 'tfidf'
 
+        elif file_io == 'H' or file_io == 'h':
+
+            
+            # tfidf cosim matrix set up
+            # R = to_array(prefs)
+            # feature_str = to_string(features)                 
+            # feature_docs = to_docs(feature_str, genres)
+            # cosim_matrix = cosine_sim(feature_docs)
+            # # item-based set up 
+            # # transpose the U-I matrix and calc item-item similarities matrix
+            # weight = 50
+            # thresh = 0.0
+            # itemsim = calculateSimilarItems(prefs, weight,similarity=sim_distance)                     
+            # Dump/save dictionary to a pickle file
+            # pickle.dump(itemsim, open( "save_itemsim_distance.p", "wb" ))
+            ready = True
+            recAlgo = 'hybrid'
+            
         elif file_io == 'RECS' or file_io == 'recs': 
             user = input('Enter userid (for ml-100k) or return to quit: ')
             #I think we need another input here to specify the algorithm
@@ -2284,12 +2412,15 @@ def main():
                     recommendation = user_preds[:n]
                 elif recAlgo == "tfidf":
                     sim_matrix = cosim_matrix
-                    recommendation = get_TFIDF_recommendations(prefs, sim_matrix, user, SIG_THRESHOLD, movie_to_ID(movies))[:n]
-                
-
+                    recommendation = get_TFIDF_recommendations(prefs, sim_matrix, user, TFIDF_SIG_THRESHOLD, movie_to_ID(movies))[:n]
+                elif recAlgo == 'hybrid':
+                    recommendation = get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie_to_ID(movies), weight, thresh)[:n]
+                    
 
                 print("Top %d Recommendations from %s are: " % (n,recAlgo))
-                print(recommendation)
+                for rec in recommendation:
+                    print(rec)
+                # print(recommendation)
             
 
             else: 
