@@ -26,7 +26,15 @@ from time import time
 from copy import deepcopy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
+import tensorflow as tf
+from keras.models import load_model
+from sklearn import datasets
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import train_test_split
+from keras.layers import Input, Embedding, Flatten, Dot, Dense, Concatenate, Dropout, BatchNormalization
+from keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.losses import MeanSquaredError
 from mf_sgd_als_class import ExplicitMF
 
 # TFIDF 
@@ -52,7 +60,6 @@ ALS_REG = 0.1
 SGD_FACTORS = 200
 SGD_LEARNING_RATE = 0.02
 SGD_REG = 0.02
-
 
 
 def from_file_to_dict(path, datafile, itemfile):
@@ -140,7 +147,7 @@ def ratings_to_2D_matrix(ratings, m, n):
     
     return ratingsMatrix
 
-def train_test_split(ratings, TRAIN_ONLY):
+def mf_train_test_split(ratings, TRAIN_ONLY):
     ''' split the data into train and test '''
     test = np.zeros(ratings.shape)
     train = deepcopy(ratings) # instead of copy()
@@ -1772,7 +1779,7 @@ def main():
             prefs = from_file_to_dict(path, file_dir+datafile, file_dir+itemfile)
             print('Number of users: %d\nList of users:' % len(prefs), 
                   list(prefs.keys()))      
-       
+            data_ready = True
         elif file_io == 'PD-R' or file_io == 'pd-r':
             data_folder = '/data/' # for critics
             #print('\npath: %s\n' % path_name + data_folder) # debug: print path info
@@ -1784,6 +1791,7 @@ def main():
             
             # set test/train in case they were set by a previous file I/O command
             test_train_done = False
+            data_ready = True
             print()
             print('Test and Train arrays are empty!')
             print()
@@ -1804,6 +1812,7 @@ def main():
             ratings = file_info(df)
             movies, genres, features = from_file_to_2D(path, file_dir+genrefile, file_dir+itemfile)
             test_train_done = False
+            data_ready = True
             print()
             print('Test and Train arrays are empty!')
             print()
@@ -1828,6 +1837,7 @@ def main():
             print('features')
             print(features)
             ready = False
+            data_ready = True
         
         elif file_io == 'D' or file_io == 'd':
             print()
@@ -2119,17 +2129,17 @@ def main():
                     sim_matrix = get_uu_cf_matrix("distance")
                     sim = sim_distance
                     algo = ext_getRecommendationsSim
-                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    mse, mae, rmse, mse_error_list, mae_error_list  = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
                 elif recAlgo == "item-based-pearson":
                     sim_matrix = get_ii_cf_matrix("pearson")
                     sim = sim_pearson
                     algo = ext_getRecommendedItems
-                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    mse, mae, rmse, mse_error_list, mae_error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
                 elif recAlgo == 'item-based-distance':
                     sim_matrix = get_ii_cf_matrix("distance")
                     sim = sim_distance
                     algo = ext_getRecommendedItems
-                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    mse, mae, rmse, mse_error_list, mae_error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
                 elif recAlgo == 'tfidf':
                     sim_matrix = cosim_matrix
                     
@@ -2163,7 +2173,7 @@ def main():
                     TRAIN_ONLY = False
                 
                 #print('TRAIN_ONLY  in EVAL =', TRAIN_ONLY) ## debug
-                train, test = train_test_split(ratings, TRAIN_ONLY) ## this should 
+                train, test = mf_train_test_split(ratings, TRAIN_ONLY) ## this should 
                 ##     be only place where TRAIN_ONLY is needed!! 
                 ##     Check for len(test)==0 elsewhere
                 
@@ -2358,7 +2368,6 @@ def main():
                     print ('Empty test/train arrays, run the T command!')
                     print() 
 
-
         elif file_io == 'TFIDF' or file_io == 'tfidf':
                 R = to_array(prefs)
                 feature_str = to_string(features)                 
@@ -2400,27 +2409,68 @@ def main():
             recAlgo = 'hybrid'
             
         elif file_io == 'RECS' or file_io == 'recs': 
-            user = input('Enter userid (for ml-100k) or return to quit: ')
-            #I think we need another input here to specify the algorithm
-            #recAlgo = input("Enter ALS or SGD orDeep Learning or TFIDF or Hybrid: "")
-            n = 5
-            if ready: 
-                if recAlgo == "item-based-pearson":
-                    sim_matrix = get_ii_cf_matrix("pearson")
-                    
-                    thresh = 0.0  
-                    recommendation = getRecommendedItems(prefs, user, sim_matrix, weight, thresh)[:n]
-                elif recAlgo == "item-based-distance":
-                    
-                    thresh = 0.0
-                    sim_matrix = get_ii_cf_matrix("distance")
-                    recommendation = getRecommendedItems(prefs, user, sim_matrix, weight, thresh)[:n]
-                elif recAlgo == "user-based-pearson":
-                    
-                    thresh = 0.3
-                    sim_matrix = get_uu_cf_matrix("pearson")
-                    recommendation = getRecommendationsSim(prefs, user, sim_matrix, weight, thresh)[:n]
-                elif recAlgo == "user-based-distance":
+            if not data_ready: 
+                print("No data is loaded")
+            else:
+                # recAlgo = input('Which recommendation algorithm would you like to use?, \n' 
+                #                 'Item-based distance (ibd), \n'
+                #                 'Item-based pearson (ibp), \n'
+                #                 'User-based distance (ubd), \n'
+                #                 'User-based pearson (ubp), \n'
+                #                 'MF-Alternating Least Square (mf-als), \n', 
+                #                 'MF-Stochastic Gradient Decent(mf-sgd), \n', 
+                #                 'Term-frequency Inverse Document Frequency (tfidf), \n', 
+                #                 'Hybrid Recommendation with IB distance (h-ibd), \n', 
+                #                 'Hybrid Recommendation with IB pearson (h-ibp), \n', 
+                #                 'Neural Collaborative Filtering (ncf), \n')
+
+                # if recAlgo == 'ibp':
+                # elif recAlgo == 'ibd':
+                # elif recAlgo == 'ubp':
+                # elif recAlgo == 'ubd':
+                # elif recAlgo == 'mf-als':
+                # elif recAlgo == 'mf-sgd':
+                # elif recAlgo == 'tfidf':
+                # elif recAlgo == 'h-ibd':
+                # elif recAlgo == 'h-ibp':
+                # elif recAlgo == 'ncf':
+                # else:
+                user = input('Enter userid (for ml-100k) or return to quit: ')
+                #I think we need another input here to specify the algorithm
+                #recAlgo = input("Enter ALS or SGD orDeep Learning or TFIDF or Hybrid: "")
+                n = 5
+                if ready: 
+                    if recAlgo == "item-based-pearson":
+                        sim_matrix = get_ii_cf_matrix("pearson")
+                        
+                        thresh = 0.0  
+                        recommendation = getRecommendedItems(prefs, user, sim_matrix, weight, thresh)[:n]
+                    elif recAlgo == "item-based-distance":
+                        
+                        thresh = 0.0
+                        sim_matrix = get_ii_cf_matrix("distance")
+                        recommendation = getRecommendedItems(prefs, user, sim_matrix, weight, thresh)[:n]
+                    elif recAlgo == "user-based-pearson":
+                        
+                        thresh = 0.3
+                        sim_matrix = get_uu_cf_matrix("pearson")
+                        recommendation = getRecommendationsSim(prefs, user, sim_matrix, weight, thresh)[:n]
+                    elif recAlgo == "user-based-distance":
+                        
+                        thresh = 0.0
+                        sim_matrix = get_uu_cf_matrix("distance")
+                        recommendation = getRecommendationsSim(prefs, user, sim_matrix, weight, thresh)[:n]
+                    elif recAlgo == "MF_ALS":
+                        
+                        predictions = get_mf_recommendations(MF_ALS, movies, user)
+                        recommendation = predictions[:n]
+                    elif recAlgo == "MF_SGD":
+                        predictions = get_mf_recommendations(MF_SGD, movies, user)
+                        
+                        recommendation = predictions[:n]
+                    elif recAlgo == "tfidf":
+                        sim_matrix = cosim_matrix
+                        recommendation = get_TFIDF_recommendations(prefs, sim_matrix, user, TFIDF_SIG_THRESHOLD, movie_to_ID(movies))[:n]
                     
                     thresh = 0.0
                     sim_matrix = get_uu_cf_matrix("distance")
@@ -2446,9 +2496,9 @@ def main():
                 # print(recommendation)
             
 
-            else: 
-                print("Similarity matrix not ready. ")
-                print()
+                else: 
+                    print("Similarity matrix not ready. ")
+                    print()
         
         # elif file_io == 'exp' or file_io == 'EXP':
         #     results = pd.DataFrame(columns=["Algorithm", "Sim. Method", "Sig. Weighting", "Sim. Threshold", "MSE", "MAE", "RMSE", "len(SE list)"])
