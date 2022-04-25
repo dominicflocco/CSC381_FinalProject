@@ -12,6 +12,7 @@ CSC381 Programmer/Researcher: Dominic Flocco
 
 #from curses.ascii import SI
 import os
+import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from math import *
@@ -35,8 +36,10 @@ from keras.layers import Input, Embedding, Flatten, Dot, Dense, Concatenate, Dro
 from keras.models import Model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import MeanSquaredError
-from mf_sgd_als_class import ExplicitMF
-
+from sympy import evaluate
+warnings.filterwarnings('ignore')
+# from mf_sgd_als_class import ExplicitMF
+# from NeuMF import NeuMF
 # TFIDF 
 TFIDF_SIG_THRESHOLD = 0.0
 # Item-based distance
@@ -52,6 +55,7 @@ UBD_SIG_WEIGHT = 25
 UBP_SIG_THRESHOLD = 0.3
 UBP_SIG_WEIGHT = 1
 
+HYBRID_WEIGHT = 1.0
 ITERATIONS = 20
 # MF ALS 
 ALS_FACTORS = 2
@@ -61,6 +65,678 @@ SGD_FACTORS = 200
 SGD_LEARNING_RATE = 0.02
 SGD_REG = 0.02
 
+class NeuMF():
+    def __init__(self, 
+                dataset, 
+                test_size=0.2,
+                n_factors=5, 
+                lr=1e-3, 
+                n_layers=3, 
+                n_nodes_per_layer=[],
+                n_epochs=5, 
+                batch_size=256, 
+                model_num=1, 
+                dropout_prob=0.2):
+        
+        self.dataset = dataset 
+        self.cwd=os.getcwd() 
+        self.n_users = len(pd.unique(dataset["user_id"]))
+        self.n_items = len(pd.unique(dataset["item_id"]))
+        self.n_factors = n_factors
+        self.n_epochs = n_epochs
+        self.batch_size = batch_size 
+        self.model_num = model_num
+        self.dropout_prob = dropout_prob
+        self.lr = lr
+        self.n_layers = n_layers
+        self.test_size = test_size
+        self.n_nodes_per_layer = n_nodes_per_layer
+        self.drop_out_prob = dropout_prob
+    
+    def train(self):
+        # creating movie embedding path
+        self.train, self.test, self.val = self.test_train_split()
+
+        self.movie_input = Input(shape=[1], name="Movie-Input")
+        self.movie_embedding = Embedding(self.n_items+1, self.n_factors, name="Movie-Embedding")(self.movie_input)
+        self.movie_vec = Flatten(name="Flatten-Books")(self.movie_embedding)
+
+        # creating user embedding path
+        self.user_input = Input(shape=[1], name="User-Input")
+        self.user_embedding = Embedding(self.n_users+1, self.n_factors, name="User-Embedding")(self.user_input)
+        self.user_vec = Flatten(name="Flatten-Users")(self.user_embedding)
+
+        # concatenate features
+        conc = Concatenate()([self.movie_vec, self.user_vec])
+        # add fully-connected-layers
+
+        dense = Dense(self.n_nodes_per_layer[0], activation='relu')(conc)
+        dropout = Dropout(self.dropout_prob)(dense)
+        batch_norm = BatchNormalization()(dropout)
+
+        for k, n_nodes in enumerate(self.n_nodes_per_layer[1:-1]):
+            dense = Dense(n_nodes, activation='relu')(batch_norm)
+            dropout = Dropout(self.dropout_prob)(dense)
+            batch_norm = BatchNormalization()(dropout)
+        
+        dense = Dense(self.n_nodes_per_layer[-1], activation='relu')(batch_norm)
+        out = Dense(1)(dense)
+
+        self.model = Model([self.user_input, self.movie_input], out)
+        self.model.compile(optimizer=Adam(learning_rate=self.lr), loss=MeanSquaredError())
+
+    def test_train_split(self):
+    
+        train, temp_test = train_test_split(self.dataset, test_size=self.test_size, random_state=42)
+        val, test = train_test_split(temp_test, test_size=0.5, random_state=42)
+
+        return train, test, val
+    def plot_learning_curve(self): 
+
+        history = self.model.fit([self.train.user_id, self.train.item_id], 
+                            self.train.rating, 
+                            validation_data = ((self.val.user_id, self.val.item_id), self.val.rating), 
+                            epochs=self.n_epochs, 
+                            verbose=1, 
+                            batch_size=self.batch_size)
+
+        train_loss = history.history['loss']
+        val_loss = history.history['val_loss']
+
+        plt.plot(train_loss, label='train')
+        plt.plot(val_loss, label ='val')
+        plt.yscale('log')
+        plt.ylabel('mse loss')
+        plt.xlabel('epochs')
+        plt.title(f'Model {self.model_num}: Loss Curves')
+        plt.legend()
+        plt.savefig(f'{self.cwd}/MLP_tunning/model_{self.model_num}_loss.png')
+        plt.close()
+
+    def test_eval(self):
+
+        predictions = self.model.predict([self.test.user_id, self.test.item_id])
+        std = np.std(predictions)
+        preds_list = []
+        for rating in predictions: 
+            preds_list.append(rating[0])
+        
+        pred_ratings = np.array(preds_list).astype('float64')
+        actual_ratings = np.array(self.test.rating)
+
+        test_mse = mean_squared_error(actual_ratings, pred_ratings)
+
+        header = ['model', 'test mse', 'test std', 'epochs', 'lr', 'n_nodes_per_layer', 'n_factors', 'batch_size', 'dropout_prob']
+        results = {'model':self.model_num, 
+                'test mse': test_mse, 
+                'test std':std,
+                'epochs': self.n_epochs, 
+                'lr':self.lr, 
+                'n_nodes_per_layer': self.n_nodes_per_layer, 
+                'n_factors':self.n_factors, 
+                'batch_size':self.batch_size, 
+                'dropout_prob':self.dropout_prob}
+       
+
+        results_df = pd.DataFrame.from_dict(results)
+        results_df.to_csv(f'{self.cwd}/MLP_tunning/model_{self.model_num}_results.csv')
+        return results
+
+    def predict(self, u, i, id_to_movie):
+        all_items = pd.unique(self.dataset["item_id"])
+        user_array = np.asarray([u for i in range(len(all_items))])
+        
+        prediction = self.model.predict([user_array, all_items])
+
+        item_index = np.where(all_items==i)
+
+        rating=prediction[item_index[0]]
+        item = id_to_movie[str(i)]
+        print(rating[0][0], item)
+
+        return rating, item
+
+    def get_recommendations(self, u, id_to_movies):
+        all_items = pd.unique(self.dataset["item_id"])
+        user_array = np.asarray([u for i in range(len(all_items))])
+        
+        predictions = self.model.predict([user_array, all_items])
+        preds = []
+        for i in range(len(predictions)): 
+            pred = predictions[i][0]
+            if pred > 5:
+                pred = 5.0
+            elif pred < 0: 
+                pred = 1.0
+            preds.append((pred, id_to_movies[str(all_items[i])]))
+            
+        preds.sort(reverse=True)
+
+        return preds
+
+    def eval_recs(self): 
+
+        predictions = self.model.predict([self.dataset.user_id, self.dataset.item_id])
+
+        mse_error_list, mae_error_list = [], [] 
+        for i in range(len(predictions)): 
+            pred = predictions[i]
+            if pred > 5:
+                pred = 5.0
+            elif pred < 0: 
+                pred = 1.0
+            actual = self.dataset.rating.iloc[i]
+            se = (pred - actual)**2
+            error = abs(pred-actual)
+            mse_error_list.append(se)
+            mae_error_list.append(error)
+
+        mse = sum(mse_error_list)/len(mse_error_list)
+        mae = sum(mae_error_list)/len(mae_error_list)
+        rmse = math.sqrt(mse)
+        
+        print("NeuMF MSE =  %f " % (mse))
+        print("NeuMF MAE = %f " % (mae))
+        print("NeuMF RMSE = %f " % (rmse))
+        
+        return mse, mae, rmse, mse_error_list
+
+class ExplicitMF():
+    def __init__(self, 
+                 ratings,
+                 n_factors=40,
+                 learning='sgd',
+                 sgd_alpha = 0.1,
+                 sgd_beta = 0.1,
+                 sgd_random = False,
+                 item_fact_reg=0.0, 
+                 user_fact_reg=0.0,
+                 item_bias_reg=0.0,
+                 user_bias_reg=0.0,
+                 max_iters = 20,
+                 verbose=True):
+        """
+        Train a matrix factorization model to predict empty 
+        entries in a matrix. The terminology assumes a 
+        ratings matrix which is ~ user x item
+        
+        Params
+        ======
+        ratings : (ndarray)
+            User x Item matrix with corresponding ratings
+            Note: can be full ratings matrix or train matrix
+        
+        n_factors : (int)
+            Number of latent factors to use in matrix factorization model
+            
+        learning : (str)
+            Method of optimization. Options include 'sgd' or 'als'.
+        
+        sgd_alpha: (float)
+            learning rate for sgd
+            
+        sgd_beta:  (float)
+            regularization for sgd
+            
+        sgd_random: (boolean)
+            False makes use of random.seed(0)
+            False means don't make it random (ie, make it predictable)
+            True means make it random (ie, changee everytime code is run)
+        
+        item_fact_reg : (float)
+            Regularization term for item latent factors
+            Note: currently, same value as user_fact_reg
+        
+        user_fact_reg : (float)
+            Regularization term for user latent factors
+            Note: currently, same value as item_fact_reg
+            
+        item_bias_reg : (float)
+            Regularization term for item biases
+            Note: for later use, not used currently
+        
+        user_bias_reg : (float)
+            Regularization term for user biases
+            Note: for later use, not used currently
+            
+        max_iters : (integer)
+            maximum number of iterations
+        
+        verbose : (bool)
+            Whether or not to printout training progress
+            
+            
+        Original Source info: 
+            https://blog.insightdatascience.com/explicit-matrix-factorization-als-sgd-and-all-that-jazz-b00e4d9b21ea#introsgd
+            https://gist.github.com/EthanRosenthal/a293bfe8bbe40d5d0995#file-explicitmf-py
+        """
+        
+        self.ratings = ratings 
+        self.n_users, self.n_items = ratings.shape
+        self.n_factors = n_factors
+        self.item_fact_reg = item_fact_reg
+        self.user_fact_reg = user_fact_reg
+        self.item_bias_reg = item_bias_reg 
+        self.user_bias_reg = user_bias_reg 
+        self.learning = learning
+        if self.learning == 'als':
+            np.random.seed(0)
+        if self.learning == 'sgd':
+            self.sample_row, self.sample_col = self.ratings.nonzero()
+            self.n_samples = len(self.sample_row)
+            self.sgd_alpha = sgd_alpha # sgd learning rate, alpha
+            self.sgd_beta = sgd_beta # sgd regularization, beta
+            self.sgd_random = sgd_random # randomize
+            if self.sgd_random == False:
+                np.random.seed(0) # do not randomize
+        self._v = verbose
+        self.max_iters = max_iters
+        self.nonZero = ratings > 0 # actual values
+        
+        print()
+        if self.learning == 'als':
+            print('ALS instance parameters:\nn_factors=%d, user_reg=%.5f,  item_reg=%.5f, num_iters=%d' %\
+              (self.n_factors, self.user_fact_reg, self.item_fact_reg, self.max_iters))
+        
+        elif self.learning == 'sgd':
+            print('SGD instance parameters:\nnum_factors K=%d, learn_rate alpha=%.5f, reg beta=%.5f, num_iters=%d, sgd_random=%s' %\
+              (self.n_factors, self.sgd_alpha, self.sgd_beta, self.max_iters, self.sgd_random ) )
+        print()
+
+    def mf_train(self, n_iter=10): 
+        """ Train model for n_iter iterations from scratch."""
+        
+        def normalize_row(x):
+            norm_row =  x / sum(x) # weighted values: each row adds up to 1
+            return norm_row
+
+        # initialize latent vectors        
+        self.user_vecs = np.random.normal(scale=1./self.n_factors,\
+                                          size=(self.n_users, self.n_factors))
+        self.item_vecs = np.random.normal(scale=1./self.n_factors,
+                                          size=(self.n_items, self.n_factors))
+        
+        if self.learning == 'als':
+            ## Try one of these. apply_long_axis came from Explicit_RS_MF_ALS()
+            ##                                             Daniel Nee code
+            
+            self.user_vecs = abs(np.random.randn(self.n_users, self.n_factors))
+            self.item_vecs = abs(np.random.randn(self.n_items, self.n_factors))
+            
+            #self.user_vecs = np.apply_along_axis(normalize_row, 1, self.user_vecs) # axis=1, across rows
+            #self.item_vecs = np.apply_along_axis(normalize_row, 1, self.item_vecs) # axis=1, across rows
+            
+            self.partial_train(n_iter)
+            
+        elif self.learning == 'sgd':
+            self.user_bias = np.zeros(self.n_users)
+            self.item_bias = np.zeros(self.n_items)
+            self.global_bias = np.mean(self.ratings[np.where(self.ratings != 0)])
+            self.partial_train(n_iter)
+    
+    
+    def partial_train(self, n_iter):
+        """ 
+        Train model for n_iter iterations. 
+        Can be called multiple times for further training.
+        Remains in the while loop for a number of iterations, calculated from
+        the contents of the iter_array in calculate_learning_curve()
+        """
+        
+        ctr = 1
+        while ctr <= n_iter:
+
+            if self.learning == 'als':
+                self.user_vecs = self.als_step(self.user_vecs, 
+                                               self.item_vecs, 
+                                               self.ratings, 
+                                               self.user_fact_reg, 
+                                               type='user')
+                self.item_vecs = self.als_step(self.item_vecs, 
+                                               self.user_vecs, 
+                                               self.ratings, 
+                                               self.item_fact_reg, 
+                                               type='item')
+                
+            elif self.learning == 'sgd':
+                self.training_indices = np.arange(self.n_samples)
+                np.random.shuffle(self.training_indices)
+                self.sgd()
+            ctr += 1
+
+    def als_step(self,
+                 latent_vectors,
+                 fixed_vecs,
+                 ratings,
+                 _lambda,
+                 type='user'):
+        """
+        ALS algo step.
+        Solve for the latent vectors specified by type parameter: user or item
+        """
+        
+        #lv_shape = latent_vectors.shape[0] ## debug
+        
+        if type == 'user':
+
+            for u in range(latent_vectors.shape[0]): # latent_vecs ==> user_vecs
+                #r_u = ratings[u, :] ## debug
+                #fvT = fixed_vecs.T ## debug
+                idx = self.nonZero[u,:] # get the uth user profile with booleans 
+                                        # (True when there are ratings) based on 
+                                        # ratingsMatrix, n x 1
+                nz_fixed_vecs = fixed_vecs[idx,] # get the item vector entries, non-zero's x f
+                YTY = nz_fixed_vecs.T.dot(nz_fixed_vecs) # fixed_vecs are item_vecs
+                lambdaI = np.eye(YTY.shape[0]) * _lambda
+                
+                latent_vectors[u, :] = \
+                    solve( (YTY + lambdaI) , nz_fixed_vecs.T.dot (ratings[u, idx] ) )
+
+                '''
+                ## debug
+                if u <= 10: 
+                    print('user vecs1', nz_fixed_vecs)
+                    print('user vecs1', fixed_vecs, '\n', ratings[u, :] )
+                    print('user vecs2', fixed_vecs.T.dot (ratings[u, :] ))
+                    print('reg', YTY, '\n', lambdaI)
+                    print('new user vecs:\n', latent_vectors[u, :])
+                ## debug
+                '''
+                    
+        elif type == 'item':
+            
+            for i in range(latent_vectors.shape[0]): #latent_vecs ==> item_vecs
+                idx = self.nonZero[:,i] # get the ith item "profile" with booleans 
+                                        # (True when there are ratings) based on 
+                                        # ratingsMatrix, n x 1
+                nz_fixed_vecs = fixed_vecs[idx,] # get the item vector entries, non-zero's x f
+                XTX = nz_fixed_vecs.T.dot(nz_fixed_vecs) # fixed_vecs are user_vecs
+                lambdaI = np.eye(XTX.shape[0]) * _lambda
+                latent_vectors[i, :] = \
+                    solve( (XTX + lambdaI) , nz_fixed_vecs.T.dot (ratings[idx, i] ) )
+
+        return latent_vectors
+
+    def sgd(self):
+        ''' run sgd algo '''
+        
+        for idx in self.training_indices:
+            u = self.sample_row[idx]
+            i = self.sample_col[idx]
+            prediction = self.predict(u, i)
+            e = (self.ratings[u,i] - prediction) # error
+            
+            # Update biases
+            self.user_bias[u] += self.sgd_alpha * \
+                                (e - self.sgd_beta * self.user_bias[u])
+            self.item_bias[i] += self.sgd_alpha * \
+                                (e - self.sgd_beta * self.item_bias[i])
+            
+            # Create copy of row of user_vecs since we need to update it but
+            #    use older values for update on item_vecs, 
+            #    so make a deepcopy of previous user_vecs
+            previous_user_vecs = deepcopy(self.user_vecs[u, :])
+            
+            # Update latent factors
+            self.user_vecs[u, :] += self.sgd_alpha * \
+                                    (e * self.item_vecs[i, :] - \
+                                     self.sgd_beta * self.user_vecs[u,:])
+            self.item_vecs[i, :] += self.sgd_alpha * \
+                                    (e * previous_user_vecs - \
+                                     self.sgd_beta * self.item_vecs[i,:])           
+    
+    def calculate_learning_curve(self, iter_array, test):
+        """
+        Keep track of MSE as a function of training iterations.
+        
+        Params
+        ======
+        iter_array : (list)
+            List of numbers of iterations to train for each step of 
+            the learning curve. e.g. [1, 5, 10, 20]
+        test : (2D ndarray)
+            Testing dataset (assumed to be user x item)
+        
+        
+        
+        This function creates two new class attributes:
+        
+        train_mse : (list)
+            Training data MSE values for each value of iter_array
+        test_mse : (list)
+            Test data MSE values for each value of iter_array
+        """
+        
+        print()
+        if self.learning == 'als':
+            print('Runtime parameters:\nn_factors=%d, user_reg=%.5f, item_reg=%.5f,'
+                  ' max_iters=%d,'
+                  ' \nratings matrix: %d users X %d items' %\
+                  (self.n_factors, self.user_fact_reg, self.item_fact_reg, 
+                   self.max_iters, self.n_users, self.n_items))
+        if self.learning == 'sgd':
+            print('Runtime parameters:\nn_factors=%d, learning_rate alpha=%.3f,'
+                  ' reg beta=%.5f, max_iters=%d, sgd_random=%s'
+                  ' \nratings matrix: %d users X %d items' %\
+                  (self.n_factors, self.sgd_alpha, self.sgd_beta, 
+                   self.max_iters, self.sgd_random, self.n_users, self.n_items))
+        print()       
+        
+        iter_array.sort()
+        self.train_mse =[]
+        self.test_mse = []
+        iter_diff = 0
+        mse_iters = []
+        start_time = time()
+        stop_time = time()
+        elapsed_time = (stop_time-start_time) #/60
+        print ( 'Elapsed train/test time %.2f secs' % elapsed_time )        
+        
+        # Loop through number of iterations
+        for (i, n_iter) in enumerate(iter_array):
+            if self._v:
+                print ('Iteration: {}'.format(n_iter))
+            if i == 0:
+                self.mf_train(n_iter - iter_diff) # init training, run first iter
+            else:
+                self.partial_train(n_iter - iter_diff) # run more iterations
+                    # .. as you go from one element of iter_array to another
+
+            predictions = self.predict_all() # calc dot product of p and qT
+            # calc train  errors -- predicted vs actual
+            self.train_mse += [self.get_mse(predictions, self.ratings)]
+            if test.any() > 0: # check if test matrix is all zeroes ==> Train Only
+                               # If so, do not calc mse and avoid runtime error   
+                # calc test errors -- predicted vs actual 
+                self.test_mse += [self.get_mse(predictions, test)]
+            else:
+                self.test_mse = ['n/a']
+            if self._v:
+                print ('Train mse: ' + str(self.train_mse[-1]))
+                if self.test_mse != ['n/a']:
+                    print ('Test mse: ' + str(self.test_mse[-1]))
+            iter_diff = n_iter
+            
+            stop_time = time()
+            elapsed_time = (stop_time-start_time) #/60
+            print ( 'Elapsed train/test time %.2f secs' % elapsed_time ) 
+            
+        return self.test_mse, self.train_mse
+
+           
+
+    def predict(self, u, i):
+        """ Single user and item prediction """
+        
+        if self.learning == 'als':
+            prediction = self.user_vecs[u, :].dot(self.item_vecs[i, :].T)
+            if prediction > 5:
+                prediction = 5.0 
+            elif prediction < 0: 
+                prediction = 1.0
+            return prediction
+        elif self.learning == 'sgd':
+            prediction = self.global_bias + self.user_bias[u] + self.item_bias[i]
+            prediction += self.user_vecs[u, :].dot(self.item_vecs[i, :].T)
+            if prediction > 5:
+                prediction = 5.0 
+            elif prediction < 0: 
+                prediction = 1.0
+            return prediction
+    
+    def predict_all(self):
+        """ Predict ratings for every user and item """
+        
+        predictions = np.zeros((self.user_vecs.shape[0], 
+                                self.item_vecs.shape[0]))
+        for u in range(self.user_vecs.shape[0]):
+            for i in range(self.item_vecs.shape[0]):
+                predictions[u, i] = self.predict(u, i)
+        return predictions    
+
+    def get_mse(self, pred, actual):
+        ''' Calc MSE between predicted and actual values '''
+        
+        # Ignore nonzero terms.
+        pred = pred[actual.nonzero()].flatten()
+        actual = actual[actual.nonzero()].flatten()
+        return mean_squared_error(pred, actual)
+
+def ratings_to_2D_matrix(ratings, m, n):
+    '''
+    creates a U-I matrix from the data
+    ==>>  eliminates movies (items) that have no ratings!
+    '''
+    print('Summary Stats:')
+    print()
+    print(ratings.describe())
+    ratingsMatrix = ratings.pivot_table(columns=['item_id'], index =['user_id'],
+        values='rating', dropna = False) # convert to a U-I matrix format from file input
+    ratingsMatrix = ratingsMatrix.fillna(0).values # replace nan's with zeroes
+    ratingsMatrix = ratingsMatrix[0:m,0:n] # get rid of any users/items that have no ratings
+    print()
+    print('2D_matrix shape', ratingsMatrix.shape) # debug
+    
+    return ratingsMatrix
+
+def file_info(df):
+    ''' print file info/stats  '''
+    print()
+    print (df.head())
+    
+    n_users = df.user_id.unique().shape[0]
+    n_items = df.item_id.unique().shape[0]
+    
+    ratings = ratings_to_2D_matrix(df, n_users, n_items)
+    
+    print()
+    print (ratings)
+    print()
+    print (str(n_users) + ' users')
+    print (str(n_items) + ' items')
+    
+    sparsity = float(len(ratings.nonzero()[0]))
+    sparsity /= (ratings.shape[0] * ratings.shape[1])
+    sparsity *= 100
+    sparsity = 100 - sparsity
+    print ('Sparsity: {:4.2f}%'.format(sparsity))
+    return ratings
+
+
+    lcvs
+
+def test_train_info(test, train):
+    ''' print test/train info   '''
+
+    print()
+    print ('Train info: %d rows, %d cols' % (len(train), len(train[0])))
+    print ('Test info: %d rows, %d cols' % (len(test), len(test[0])))
+    
+    test_count = 0
+    for i in range(len(test)):
+        for j in range(len(test[0])):
+            if test[i][j] !=0:
+                test_count += 1
+                #print (i,j,test[i][j]) # debug
+    print('test ratings count =', test_count)
+    
+    train_count = 0
+    for i in range(len(train)):
+        for j in range(len(train[0])):
+            if train[i][j] !=0:
+                train_count += 1
+                #print (i,j,train[i][j]) # debug
+    
+    total_count = test_count + train_count
+    print('train ratings count =', train_count)
+    print('test + train count', total_count)
+    print('test/train percentages: %0.2f / %0.2f' 
+          % ( (test_count/total_count)*100, (train_count/total_count)*100 ))
+    print()
+
+def plot_learning_curve(iter_array, model):
+    ''' plot the error curve '''
+    
+    ## Note: the iter_array can cause plots to NOT 
+    ##    be smooth! If matplotlib can't smooth, 
+    ##    then print/plot results every 
+    ##    max_num_iterations/10 (rounded up)
+    ##    instead of using an iter_array list
+    
+    #print('model.test_mse', model.test_mse) # debug
+    if model.test_mse != ['n/a']:
+        plt.plot(iter_array, model.test_mse, label='Test', linewidth=3)
+    plt.plot(iter_array, model.train_mse, label='Train', linewidth=3)
+
+    plt.xticks(fontsize=10); # 16
+    plt.xticks(iter_array, iter_array)
+    plt.yticks(fontsize=10);
+    
+    axes = plt.gca()
+    axes.grid(True) # turns on grid
+    
+    if model.learning == 'als':
+        runtime_parms = \
+            'shape=%s, n_factors=%d, user_fact_reg=%.3f, item_fact_reg=%.3f'%\
+            (model.ratings.shape, model.n_factors, model.user_fact_reg, model.item_fact_reg)
+            #(train.shape, model.n_factors, model.user_fact_reg, model.item_fact_reg)
+        plt.title("ALS Model Evaluation\n%s" % runtime_parms , fontsize=10) 
+    elif model.learning == 'sgd':
+        runtime_parms = \
+            'shape=%s, num_factors K=%d, alpha=%.3f, beta=%.3f'%\
+            (model.ratings.shape, model.n_factors, model.sgd_alpha, model.sgd_beta)
+            #(train.shape, model.n_factors, model.learning_rate, model.user_fact_reg)
+        plt.title("SGD Model Evaluation\n%s" % runtime_parms , fontsize=10)         
+    
+    plt.xlabel('Iterations', fontsize=15);
+    plt.ylabel('Mean Squared Error', fontsize=15);
+    plt.legend(loc='best', fontsize=15, shadow=True) # 'best', 'center right' 20
+    
+def ncf_read_data(filename):
+    header = ['user_id','item_id','rating','timestamp']
+    dataset = pd.read_csv(filename,sep = '\t',names = header)
+    print(dataset.head())
+    return dataset
+
+def ncf_evaluate_recs(predictions, test, user): 
+
+    mse_error_list, mae_error_list = [], []
+    for i in range(len(predictions)): 
+        pred = predictions[i]
+        actual = test.rating.iloc[i]
+        se = (pred - actual)**2
+        error = abs(pred-actual)
+        mse_error_list.append(se)
+        mae_error_list.append(error)
+
+    mse = sum(mse_error_list)/len(mse_error_list)
+    mae = sum(mae_error_list)/len(mae_error_list)
+    rmse = math.sqrt(mse)
+    print("Test MSE for user %d = %f " % (user, mse))
+    print("Test MAE for user %d = %f " % (user, mae))
+    print("Test RMSE for user %d = %f " % (user, rmse))
+    
+    return mse, mae, rmse, len(mse_error_list)
 
 def from_file_to_dict(path, datafile, itemfile):
     ''' Load user-item matrix from specified file 
@@ -1477,7 +2153,7 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
             i = cosim_matrix[int(movie_title_to_id[ratedMov])-1][itemID]
             j = itemsim[int(movie_title_to_id[ratedMov])-1][itemID]
             j = j * float(weight)
-            #if cosim is 0, use item-item sim multiplied by hybrid weight
+            # if cosim is 0, use item-item sim multiplied by hybrid weight
             if i == 0 and j>float(item_thresh):
                 num+= (j*rating)
                 den+=j
@@ -1709,16 +2385,16 @@ def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh):
             # if item not in set([rec[1] for rec in recs]):
             #         # print("From loo_cv_sim(), No prediction calculated for item %s, user %s in pred_list: %s" % (item, user, recs))
             #         continue
-        # if len(mse_error_list) > 0:
-        #     if i%10 == 0:
-        #         print("(%d / %d) Number of users processed: %d " % (k, runs, i))
-        #         cur_time = timeit.default_timer()
-        #         print("%.2f secs for %d users, time per user: %.2f" % (cur_time - start_time, i, (cur_time - start_time)/i))
-        #         # print("Squared Error List:", mse_error_list)
-        #         mse = sum(mse_error_list)/len(mse_error_list) 
-        #         mae = sum(mae_error_list)/len(mae_error_list)
-        #         rmse = math.sqrt(sum(mse_error_list)/len(mse_error_list))
-        #         print("MSE: %f, RMSE: %f, MAE: %f" %(mse, rmse, mae))
+        if len(mse_error_list) > 0:
+            if i%100 == 0:
+                print("Number of users processed: %d " % (i))
+                cur_time = timeit.default_timer()
+                print("%.2f secs for %d users, time per user: %.2f" % (cur_time - start_time, i, (cur_time - start_time)/i))
+                # print("Squared Error List:", mse_error_list)
+                mse = sum(mse_error_list)/len(mse_error_list) 
+                mae = sum(mae_error_list)/len(mae_error_list)
+                rmse = math.sqrt(sum(mse_error_list)/len(mse_error_list))
+                print("MSE: %f, RMSE: %f, MAE: %f" %(mse, rmse, mae))
 
     if len(mse_error_list) == 0:
         return 0, 0, 0, []
@@ -1728,6 +2404,7 @@ def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh):
     
     
     return mse, mae, rmse, mse_error_list
+
 def get_mf_recommendations(MF, movies, user):
 
     predictions = []
@@ -1740,7 +2417,6 @@ def get_mf_recommendations(MF, movies, user):
     return predictions
 
     
-
 def main():
     ''' User interface for Python console '''
 
@@ -1768,6 +2444,7 @@ def main():
                         'TFIDF(and cosine sim Setup)?, \n'
                         'LCVSIM(eave one out cross-validation)?, \n'
                         'H(ybrid reccommendation setup), \n' 
+                        'NCF(Neual Collaborative Filtering), \n'
                         'RECS(ecommendations -- all algos)? \n==> ')
         
         if file_io == 'R' or file_io == 'r':
@@ -2134,31 +2811,50 @@ def main():
                     sim_matrix = get_ii_cf_matrix("pearson")
                     sim = sim_pearson
                     algo = ext_getRecommendedItems
-                    mse, mae, rmse, mse_error_list, mae_error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    mse, mae, rmse, error_list, mae_error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
                 elif recAlgo == 'item-based-distance':
                     sim_matrix = get_ii_cf_matrix("distance")
                     sim = sim_distance
                     algo = ext_getRecommendedItems
-                    mse, mae, rmse, mse_error_list, mae_error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    mse, mae, rmse, error_list, mae_error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
                 elif recAlgo == 'tfidf':
                     sim_matrix = cosim_matrix
+                    threshs = [0, 0.15, 0.3, 0.45]
+                    results = pd.DataFrame(columns=['thresh', 'MSE', 'MAE', 'RMSE', 'Coverage'])
                     
-                    mse, mae, rmse, error_list = loo_cv_sim_tfidf(prefs, sim_matrix, TFIDF_SIG_THRESHOLD, movie_to_ID(movies))
+                    for t in threshs: 
+                        data={}
+                        mse, mae, rmse, error_list = loo_cv_sim_tfidf(prefs, sim_matrix, t, movie_to_ID(movies))
+                        coverage = len(error_list)
+                        data['thresh'], data['MSE'], data['MAE'], data['RMSE'], data['Coverage'] = t, mse, mae, rmse, coverage
+                        results = results.append(data, ignore_index=True)
+                    results.to_csv('tfidf_exp.csv')
                 elif recAlgo == 'hybrid':
-                    mse, mae, rmse, error_list = loo_cv_sim_hybrid(prefs, cosim_matrix, itemsim, movies, movie_to_ID(movies), weight, thresh)
-                
+
+                    weights = [1.0, 0.25, 0.5, 0.75]
+                    results = pd.DataFrame(columns=['weight', 'MSE', 'MAE', 'RMSE', 'Coverage'])
+                    for w in weights:
+                        data = {}
+                        mse, mae, rmse, error_list = loo_cv_sim_hybrid(prefs, cosim_matrix, itemsim, movies, movie_to_ID(movies), w, thresh)
+                        coverage = len(error_list)
+                        data['thresh'], data['MSE'], data['MAE'], data['RMSE'], data['Coverage'] = t, mse, mae, rmse, coverage
+                        results = results.append(data, ignore_index=True)
+                    results.to_csv('hybrid_pearson_weight_exp.csv')
+
                 elif recAlgo == 'MF_ALS':
                     mse, mae, rmse, error_list = eval_mf(MF_ALS)
                 elif recAlgo == 'MF_SGD':
                     mse, mae, rmse, error_list = eval_mf(MF_SGD)
-                
+                elif recAlgo == 'ncf':
+                    mse, mae, rmse, error_list = NCF.eval_recs()
                 print('%s-based LOO_CV_SIM Evaluation:' % recAlgo)
                 
-                #coverage = len(error_list)/(len(prefs)*len(prefs))
+                coverage = len(error_list)
                 print('%s for ML-100K: %.5f, len(SE list): %d ' % ("MSE", mse, len(error_list)) )
                 print('%s for ML-100K: %.5f, len(SE list): %d ' % ("MAE", mae, len(error_list)) )
                 print('%s for ML-100K: %.5f, len(SE list): %d ' % ("RMSE", rmse, len(error_list)) )
-                #print('%s for ML-100K: %.5f, len(SE list): %d ' % ("Coverage", coverage, len(error_list)) )
+                # print('%s for ML-100K: %.5f, len(SE list): %d ' % ("len(SE list)", coverage, len(error_list)) )
+                np.savetxt(f'{recAlgo}_mse_error_list.csv', np.asarray(error_list), delimiter=',')
                 print()
                     
             else:
@@ -2367,6 +3063,29 @@ def main():
                 else:
                     print ('Empty test/train arrays, run the T command!')
                     print() 
+        elif file_io == 'ncf' or file_io == 'NCF':
+            cwd = os.getcwd() 
+            path = cwd + "/data/ml-100k/u.data"
+            dataset = ncf_read_data(path)
+            file_dir = 'data/ml-100k/' # path from current directory
+            datafile = 'u.data'  # ratings file
+            itemfile = 'u.item'  # movie titles file    
+            genrefile = 'u.genre' # movie genre file     
+            movies, genres, features = from_file_to_2D(cwd, file_dir+genrefile, file_dir+itemfile)
+            NCF = NeuMF(dataset, 
+                test_size=0.2,
+                n_factors=5, 
+                lr=1e-3, 
+                n_layers=3, 
+                n_nodes_per_layer=[128, 64, 32, 16, 8, 4, 2],
+                n_epochs=25, 
+                batch_size=256, 
+                model_num=1, 
+                dropout_prob=0.2)
+            
+            NCF.train() 
+            recAlgo = 'ncf'
+            ready = True
 
         elif file_io == 'TFIDF' or file_io == 'tfidf':
                 R = to_array(prefs)
@@ -2436,9 +3155,10 @@ def main():
                 # elif recAlgo == 'ncf':
                 # else:
                 user = input('Enter userid (for ml-100k) or return to quit: ')
+                n = input('How many recommendations would you like (1 for single, n for top-n)? ')
                 #I think we need another input here to specify the algorithm
                 #recAlgo = input("Enter ALS or SGD orDeep Learning or TFIDF or Hybrid: "")
-                n = 5
+                n = int(n)
                 if ready: 
                     if recAlgo == "item-based-pearson":
                         sim_matrix = get_ii_cf_matrix("pearson")
@@ -2472,27 +3192,16 @@ def main():
                         sim_matrix = cosim_matrix
                         recommendation = get_TFIDF_recommendations(prefs, sim_matrix, user, TFIDF_SIG_THRESHOLD, movie_to_ID(movies))[:n]
                     
-                    thresh = 0.0
-                    sim_matrix = get_uu_cf_matrix("distance")
-                    recommendation = getRecommendationsSim(prefs, user, sim_matrix, weight, thresh)[:n]
-                elif recAlgo == "MF_ALS":
+    
+                    elif recAlgo == 'hybrid':
+                        recommendation = get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie_to_ID(movies), HYBRID_WEIGHT, thresh)[:n]
                     
-                    predictions = get_mf_recommendations(MF_ALS, movies, user)
-                    recommendation = predictions[:n]
-                elif recAlgo == "MF_SGD":
-                    predictions = get_mf_recommendations(MF_SGD, movies, user)
-                    
-                    recommendation = predictions[:n]
-                elif recAlgo == "tfidf":
-                    sim_matrix = cosim_matrix
-                    recommendation = get_TFIDF_recommendations(prefs, sim_matrix, user, TFIDF_SIG_THRESHOLD, movie_to_ID(movies))[:n]
-                elif recAlgo == 'hybrid':
-                    recommendation = get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie_to_ID(movies), weight, thresh)[:n]
-                    
+                    elif recAlgo == 'ncf':
+                        recommendation = NCF.get_recommendations(user, movies)[:n]
 
-                print("Top %d Recommendations from %s are: " % (n,recAlgo))
-                for rec in recommendation:
-                    print(rec)
+                    print("Top %d Recommendations from %s are: " % (n,recAlgo))
+                    for rec in recommendation:
+                        print(rec)
                 # print(recommendation)
             
 

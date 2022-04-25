@@ -1457,14 +1457,14 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
     matrix2 = copy.copy(cosim_matrix)
     movie2 = movie_to_ID(movies)
 
-    #converts similarity dictionary to a matrix
-    # for i in itemsim:
-    #     location1 = int(movie_title_to_id[i]) - 1
-    #     for j in range(len(itemsim[i])):
-    #         location2 = int(movie2[itemsim[i][j][1]]) - 1
-    #         matrix2[location1][location2] = itemsim[i][j][0]
-    #         if i == movie2[itemsim[i][j][1]]:
-    #             matrix2[location1][location2] = 1
+    # converts similarity dictionary to a matrix
+    for i in itemsim:
+        location1 = int(movie_title_to_id[i]) - 1
+        for j in range(len(itemsim[i])):
+            location2 = int(movie2[itemsim[i][j][1]]) - 1
+            matrix2[location1][location2] = itemsim[i][j][0]
+            if i == movie2[itemsim[i][j][1]]:
+                matrix2[location1][location2] = 1
     
     for item, itemID in movie_title_to_id.items():
         if item not in prefs[user].keys():
@@ -1475,7 +1475,7 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
         num = 0
         for ratedMov, rating in prefs[user].items():
             i = cosim_matrix[int(movie_title_to_id[ratedMov])-1][itemID]
-            j = itemsim[int(movie_title_to_id[ratedMov])-1][itemID]
+            j = matrix2[int(movie_title_to_id[ratedMov])-1][itemID]
             j = j * float(weight)
             #if cosim is 0, use item-item sim multiplied by hybrid weight
             if i == 0 and j>float(item_thresh):
@@ -1728,6 +1728,7 @@ def loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh):
     
     
     return mse, mae, rmse, mse_error_list
+
 def get_mf_recommendations(MF, movies, user):
 
     predictions = []
@@ -1740,7 +1741,6 @@ def get_mf_recommendations(MF, movies, user):
     return predictions
 
     
-
 def main():
     ''' User interface for Python console '''
 
@@ -2160,6 +2160,8 @@ def main():
                 print('%s for ML-100K: %.5f, len(SE list): %d ' % ("RMSE", rmse, len(error_list)) )
                 #print('%s for ML-100K: %.5f, len(SE list): %d ' % ("Coverage", coverage, len(error_list)) )
                 print()
+                mse_array = np.asarray(mse_error_list)
+                np.savetxt(f'{recAlgo}_mse_list.csv', mse_array, delimiter=',')
                     
             else:
                 print('Run Sim(ilarity matrix) command to create/load Sim matrix!')
