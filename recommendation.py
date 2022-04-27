@@ -1739,7 +1739,7 @@ def transformPrefs(prefs):
             result[item][person]=prefs[person][item]
     return result
 
-def calculateSimilarItems(prefs, weight, n=2000,similarity=sim_pearson):
+def calculateSimilarItems(prefs, weight, n=100,similarity=sim_pearson):
     '''
         Creates a dictionary of items showing which other items they are most 
         similar to. 
@@ -2593,17 +2593,17 @@ def main():
                     sim_matrix = get_uu_cf_matrix("distance")
                     sim = sim_distance
                     algo = ext_getRecommendationsSim
-                    mse, mae, rmse, mse_error_list, mae_error_list  = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    mse, mae, rmse, mse_error_list  = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
                 elif recAlgo == "item-based-pearson":
                     sim_matrix = get_ii_cf_matrix("pearson")
                     sim = sim_pearson
                     algo = ext_getRecommendedItems
-                    mse, mae, rmse, error_list, mae_error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
                 elif recAlgo == 'item-based-distance':
                     sim_matrix = get_ii_cf_matrix("distance")
                     sim = sim_distance
                     algo = ext_getRecommendedItems
-                    mse, mae, rmse, error_list, mae_error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
+                    mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh)
                 elif recAlgo == 'tfidf':
                     sim_matrix = cosim_matrix
                     threshs = [0, 0.15, 0.3, 0.45]
