@@ -39,7 +39,7 @@ from tensorflow.keras.losses import MeanSquaredError
 from sympy import evaluate
 warnings.filterwarnings('ignore')
 # from mf_sgd_als_class import ExplicitMF
-# from NeuMF import NeuMF
+from NeuMF import NeuMF
 # TFIDF 
 TFIDF_SIG_THRESHOLD = 0.0
 # Item-based distance
@@ -65,181 +65,6 @@ SGD_FACTORS = 200
 SGD_LEARNING_RATE = 0.02
 SGD_REG = 0.02
 
-class NeuMF():
-    def __init__(self, 
-                dataset, 
-                test_size=0.2,
-                n_factors=5, 
-                lr=1e-3, 
-                n_layers=3, 
-                n_nodes_per_layer=[],
-                n_epochs=5, 
-                batch_size=256, 
-                model_num=1, 
-                dropout_prob=0.2):
-        
-        self.dataset = dataset 
-        self.cwd=os.getcwd() 
-        self.n_users = len(pd.unique(dataset["user_id"]))
-        self.n_items = len(pd.unique(dataset["item_id"]))
-        self.n_factors = n_factors
-        self.n_epochs = n_epochs
-        self.batch_size = batch_size 
-        self.model_num = model_num
-        self.dropout_prob = dropout_prob
-        self.lr = lr
-        self.n_layers = n_layers
-        self.test_size = test_size
-        self.n_nodes_per_layer = n_nodes_per_layer
-        self.drop_out_prob = dropout_prob
-    
-    def train(self):
-        # creating movie embedding path
-        self.train, self.test, self.val = self.test_train_split()
-
-        self.movie_input = Input(shape=[1], name="Movie-Input")
-        self.movie_embedding = Embedding(self.n_items+1, self.n_factors, name="Movie-Embedding")(self.movie_input)
-        self.movie_vec = Flatten(name="Flatten-Books")(self.movie_embedding)
-
-        # creating user embedding path
-        self.user_input = Input(shape=[1], name="User-Input")
-        self.user_embedding = Embedding(self.n_users+1, self.n_factors, name="User-Embedding")(self.user_input)
-        self.user_vec = Flatten(name="Flatten-Users")(self.user_embedding)
-
-        # concatenate features
-        conc = Concatenate()([self.movie_vec, self.user_vec])
-        # add fully-connected-layers
-
-        dense = Dense(self.n_nodes_per_layer[0], activation='relu')(conc)
-        dropout = Dropout(self.dropout_prob)(dense)
-        batch_norm = BatchNormalization()(dropout)
-
-        for k, n_nodes in enumerate(self.n_nodes_per_layer[1:-1]):
-            dense = Dense(n_nodes, activation='relu')(batch_norm)
-            dropout = Dropout(self.dropout_prob)(dense)
-            batch_norm = BatchNormalization()(dropout)
-        
-        dense = Dense(self.n_nodes_per_layer[-1], activation='relu')(batch_norm)
-        out = Dense(1)(dense)
-
-        self.model = Model([self.user_input, self.movie_input], out)
-        self.model.compile(optimizer=Adam(learning_rate=self.lr), loss=MeanSquaredError())
-
-    def test_train_split(self):
-    
-        train, temp_test = train_test_split(self.dataset, test_size=self.test_size, random_state=42)
-        val, test = train_test_split(temp_test, test_size=0.5, random_state=42)
-
-        return train, test, val
-    def plot_learning_curve(self): 
-
-        history = self.model.fit([self.train.user_id, self.train.item_id], 
-                            self.train.rating, 
-                            validation_data = ((self.val.user_id, self.val.item_id), self.val.rating), 
-                            epochs=self.n_epochs, 
-                            verbose=1, 
-                            batch_size=self.batch_size)
-
-        train_loss = history.history['loss']
-        val_loss = history.history['val_loss']
-
-        plt.plot(train_loss, label='train')
-        plt.plot(val_loss, label ='val')
-        plt.yscale('log')
-        plt.ylabel('mse loss')
-        plt.xlabel('epochs')
-        plt.title(f'Model {self.model_num}: Loss Curves')
-        plt.legend()
-        plt.savefig(f'{self.cwd}/MLP_tunning/model_{self.model_num}_loss.png')
-        plt.close()
-
-    def test_eval(self):
-
-        predictions = self.model.predict([self.test.user_id, self.test.item_id])
-        std = np.std(predictions)
-        preds_list = []
-        for rating in predictions: 
-            preds_list.append(rating[0])
-        
-        pred_ratings = np.array(preds_list).astype('float64')
-        actual_ratings = np.array(self.test.rating)
-
-        test_mse = mean_squared_error(actual_ratings, pred_ratings)
-
-        header = ['model', 'test mse', 'test std', 'epochs', 'lr', 'n_nodes_per_layer', 'n_factors', 'batch_size', 'dropout_prob']
-        results = {'model':self.model_num, 
-                'test mse': test_mse, 
-                'test std':std,
-                'epochs': self.n_epochs, 
-                'lr':self.lr, 
-                'n_nodes_per_layer': self.n_nodes_per_layer, 
-                'n_factors':self.n_factors, 
-                'batch_size':self.batch_size, 
-                'dropout_prob':self.dropout_prob}
-       
-
-        results_df = pd.DataFrame.from_dict(results)
-        results_df.to_csv(f'{self.cwd}/MLP_tunning/model_{self.model_num}_results.csv')
-        return results
-
-    def predict(self, u, i, id_to_movie):
-        all_items = pd.unique(self.dataset["item_id"])
-        user_array = np.asarray([u for i in range(len(all_items))])
-        
-        prediction = self.model.predict([user_array, all_items])
-
-        item_index = np.where(all_items==i)
-
-        rating=prediction[item_index[0]]
-        item = id_to_movie[str(i)]
-        print(rating[0][0], item)
-
-        return rating, item
-
-    def get_recommendations(self, u, id_to_movies):
-        all_items = pd.unique(self.dataset["item_id"])
-        user_array = np.asarray([u for i in range(len(all_items))])
-        
-        predictions = self.model.predict([user_array, all_items])
-        preds = []
-        for i in range(len(predictions)): 
-            pred = predictions[i][0]
-            if pred > 5:
-                pred = 5.0
-            elif pred < 0: 
-                pred = 1.0
-            preds.append((pred, id_to_movies[str(all_items[i])]))
-            
-        preds.sort(reverse=True)
-
-        return preds
-
-    def eval_recs(self): 
-
-        predictions = self.model.predict([self.dataset.user_id, self.dataset.item_id])
-
-        mse_error_list, mae_error_list = [], [] 
-        for i in range(len(predictions)): 
-            pred = predictions[i]
-            if pred > 5:
-                pred = 5.0
-            elif pred < 0: 
-                pred = 1.0
-            actual = self.dataset.rating.iloc[i]
-            se = (pred - actual)**2
-            error = abs(pred-actual)
-            mse_error_list.append(se)
-            mae_error_list.append(error)
-
-        mse = sum(mse_error_list)/len(mse_error_list)
-        mae = sum(mae_error_list)/len(mae_error_list)
-        rmse = math.sqrt(mse)
-        
-        print("NeuMF MSE =  %f " % (mse))
-        print("NeuMF MAE = %f " % (mae))
-        print("NeuMF RMSE = %f " % (rmse))
-        
-        return mse, mae, rmse, mse_error_list
 
 class ExplicitMF():
     def __init__(self, 
@@ -919,46 +744,6 @@ def test_train_info(test, train):
     print('test/train percentages: %0.2f / %0.2f' 
           % ( (test_count/total_count)*100, (train_count/total_count)*100 ))
     print()
-
-def plot_learning_curve(iter_array, model):
-    ''' plot the error curve '''
-    
-    ## Note: the iter_array can cause plots to NOT 
-    ##    be smooth! If matplotlib can't smooth, 
-    ##    then print/plot results every 
-    ##    max_num_iterations/10 (rounded up)
-    ##    instead of using an iter_array list
-    
-    #print('model.test_mse', model.test_mse) # debug
-    if model.test_mse != ['n/a']:
-        plt.plot(iter_array, model.test_mse, label='Test', linewidth=3)
-    plt.plot(iter_array, model.train_mse, label='Train', linewidth=3)
-
-    plt.xticks(fontsize=10); # 16
-    plt.xticks(iter_array, iter_array)
-    plt.yticks(fontsize=10);
-    
-    axes = plt.gca()
-    axes.grid(True) # turns on grid
-    
-    if model.learning == 'als':
-        runtime_parms = \
-            'shape=%s, n_factors=%d, user_fact_reg=%.3f, item_fact_reg=%.3f'%\
-            (model.ratings.shape, model.n_factors, model.user_fact_reg, model.item_fact_reg)
-            #(train.shape, model.n_factors, model.user_fact_reg, model.item_fact_reg)
-        plt.title("ALS Model Evaluation\n%s" % runtime_parms , fontsize=10) 
-    elif model.learning == 'sgd':
-        runtime_parms = \
-            'shape=%s, num_factors K=%d, alpha=%.3f, beta=%.3f'%\
-            (model.ratings.shape, model.n_factors, model.sgd_alpha, model.sgd_beta)
-            #(train.shape, model.n_factors, model.learning_rate, model.user_fact_reg)
-        plt.title("SGD Model Evaluation\n%s" % runtime_parms , fontsize=10)         
-    
-    plt.xlabel('Iterations', fontsize=15);
-    plt.ylabel('Mean Squared Error', fontsize=15);
-    plt.legend(loc='best', fontsize=15, shadow=True) # 'best', 'center right' 20
-    
-    plt.show()
 
 def data_stats(prefs, filename):
     ''' Computes/prints descriptive analytics:
@@ -2133,14 +1918,14 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
     matrix2 = copy.copy(cosim_matrix)
     movie2 = movie_to_ID(movies)
 
-    #converts similarity dictionary to a matrix
-    # for i in itemsim:
-    #     location1 = int(movie_title_to_id[i]) - 1
-    #     for j in range(len(itemsim[i])):
-    #         location2 = int(movie2[itemsim[i][j][1]]) - 1
-    #         matrix2[location1][location2] = itemsim[i][j][0]
-    #         if i == movie2[itemsim[i][j][1]]:
-    #             matrix2[location1][location2] = 1
+    # converts similarity dictionary to a matrix
+    for i in itemsim:
+        location1 = int(movie_title_to_id[i]) - 1
+        for j in range(len(itemsim[i])):
+            location2 = int(movie2[itemsim[i][j][1]]) - 1
+            matrix2[location1][location2] = itemsim[i][j][0]
+            if i == movie2[itemsim[i][j][1]]:
+                matrix2[location1][location2] = 1
     
     for item, itemID in movie_title_to_id.items():
         if item not in prefs[user].keys():
@@ -2151,7 +1936,7 @@ def get_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, user, movies, movie
         num = 0
         for ratedMov, rating in prefs[user].items():
             i = cosim_matrix[int(movie_title_to_id[ratedMov])-1][itemID]
-            j = itemsim[int(movie_title_to_id[ratedMov])-1][itemID]
+            j = matrix2[int(movie_title_to_id[ratedMov])-1][itemID]
             j = j * float(weight)
             # if cosim is 0, use item-item sim multiplied by hybrid weight
             if i == 0 and j>float(item_thresh):
@@ -2298,6 +2083,7 @@ def loo_cv_sim_hybrid(prefs, cosim_matrix, itemsim, movies, movie_to_id, weight,
             actual = temp[user].pop(item) # remove item 
             recs = single_Hybrid_Recommendations(temp, cosim_matrix, itemsim, user, movies, item, movie_to_id, weight, item_thresh) # get recommendation
             temp[user][item] = actual # restore item]
+
             for rec in recs: 
                 
                 if rec[1] == item: 
@@ -2416,7 +2202,7 @@ def get_mf_recommendations(MF, movies, user):
     predictions.sort(reverse=True)
     return predictions
 
-    
+
 def main():
     ''' User interface for Python console '''
 
@@ -2457,6 +2243,7 @@ def main():
             print('Number of users: %d\nList of users:' % len(prefs), 
                   list(prefs.keys()))      
             data_ready = True
+            
         elif file_io == 'PD-R' or file_io == 'pd-r':
             data_folder = '/data/' # for critics
             #print('\npath: %s\n' % path_name + data_folder) # debug: print path info
@@ -3063,6 +2850,7 @@ def main():
                 else:
                     print ('Empty test/train arrays, run the T command!')
                     print() 
+
         elif file_io == 'ncf' or file_io == 'NCF':
             cwd = os.getcwd() 
             path = cwd + "/data/ml-100k/u.data"
@@ -3075,7 +2863,7 @@ def main():
             NCF = NeuMF(dataset, 
                 test_size=0.2,
                 n_factors=5, 
-                lr=1e-3, 
+                lr=0.01, 
                 n_layers=3, 
                 n_nodes_per_layer=[128, 64, 32, 16, 8, 4, 2],
                 n_epochs=25, 
@@ -3084,30 +2872,31 @@ def main():
                 dropout_prob=0.2)
             
             NCF.train() 
+            NCF.plot_learning_curve()
             recAlgo = 'ncf'
             ready = True
 
         elif file_io == 'TFIDF' or file_io == 'tfidf':
-                R = to_array(prefs)
-                feature_str = to_string(features)                 
-                feature_docs = to_docs(feature_str, genres)
-                
-                print(R[:3][:5])
-                print()
-                print('features')
-                print(features[0:5])
-                print()
-                print('feature docs')
-                print(feature_docs[0:5]) 
-                cosim_matrix = cosine_sim(feature_docs)
-                print()
-                print('cosine sim matrix')
-                print (type(cosim_matrix), len(cosim_matrix))
-                print()
-                # similarity_histogram(cosim_matrix)
-                # print(single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, '340', movies, 'Once Upon a Time in the West (1969)', movie_to_ID(movies), 1, SIG_THRESHOLD))               
-                ready = True
-                recAlgo = 'tfidf'
+            R = to_array(prefs)
+            feature_str = to_string(features)                 
+            feature_docs = to_docs(feature_str, genres)
+            
+            print(R[:3][:5])
+            print()
+            print('features')
+            print(features[0:5])
+            print()
+            print('feature docs')
+            print(feature_docs[0:5]) 
+            cosim_matrix = cosine_sim(feature_docs)
+            print()
+            print('cosine sim matrix')
+            print (type(cosim_matrix), len(cosim_matrix))
+            print()
+            # similarity_histogram(cosim_matrix)
+            # print(single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, '340', movies, 'Once Upon a Time in the West (1969)', movie_to_ID(movies), 1, SIG_THRESHOLD))               
+            ready = True
+            recAlgo = 'tfidf'
 
         elif file_io == 'H' or file_io == 'h':
 
@@ -3209,68 +2998,6 @@ def main():
                     print("Similarity matrix not ready. ")
                     print()
         
-        # elif file_io == 'exp' or file_io == 'EXP':
-        #     results = pd.DataFrame(columns=["Algorithm", "Sim. Method", "Sig. Weighting", "Sim. Threshold", "MSE", "MAE", "RMSE", "len(SE list)"])
-        #     n = 100
-        #     k = 0
-        #     sim_methods = [sim_pearson, sim_distance, sim_cosine]
-        #     rec_algorithms = [ext_getRecommendationsSim, ext_getRecommendedItems]
-        #     sim_weightings = [1, 25, 50]
-        #     sim_thresholds = [0, 0.3, 0.5]
-        #     runs = len(sim_methods)*len(rec_algorithms)*len(sim_weightings)*len(sim_thresholds)
-           
-              
-        #     for sim in sim_methods: 
-        #         if sim == sim_distance:
-        #             sim_str = "distance"
-        #         elif sim == sim_cosine:
-        #             sim_str = "cosine"
-        #         elif sim == sim_jaccard: 
-        #             sim_str = "jaccard"
-        #         elif sim == sim_kendall_tau: 
-        #             sim_str = "kendal tau"
-        #         elif sim == sim_spearman: 
-        #             sim_str = 'spearman'
-        #         elif sim == sim_tanimoto: 
-        #             sim_str = 'tanimoto'
-        #         else: 
-        #             sim_str = "pearson"
-        #         for algo in rec_algorithms: 
-        #             for weight in sim_weightings:
-        #                 for thresh in sim_thresholds:
-        #                     k+=1 
-        #                     data = {}
-                            
-        #                     if algo == ext_getRecommendationsSim:
-        #                         #sim_matrix = pickle.load(open( "save_usersim_distance.p", "rb" ))
-        #                         sim_matrix = calculateSimilarUsers(prefs, weight,similarity=sim)
-        #                         #pickle.dump(sim_matrix, open( "save_usersim_" + sim_str + ".p", "wb" ))
-        #                         algo_str = 'User-based'
-        #                         new_weight = False
-        #                     else: 
-        #                         sim_matrix = calculateSimilarItems(prefs, weight,similarity=sim)
-        #                         #pickle.dump(sim_matrix, open( "save_itemsim_" + sim_str + ".p", "wb" ))
-        #                         algo_str = 'Item-based'
-        #                         new_weight = False
-        #                     # else:
-        #                     #     if algo == ext_getRecommendationsSim:
-        #                     #         sim_matrix = pickle.load(open( "save_usersim_" + sim_str + ".p", "rb" ))
-        #                     #         algo_str = 'User-based'
-        #                     #     else:
-        #                     #         sim_matrix = pickle.load(open( "save_itemsim_" + sim_str + ".p", "rb" ))
-        #                     #         algo_str = 'Item-based'
-
-        #                     print(algo_str, sim_str, weight, thresh)
-
-        #                     mse, mae, rmse, error_list = loo_cv_sim(prefs, sim, algo, sim_matrix, weight, thresh, runs, len(results))
-        #                     wtg_string = "n/" + str(weight)
-        #                     data["Algorithm"], data['Sim. Method'], data['Sig. Weighting'], data['Sim. Threshold'] = algo_str, sim_str, wtg_string, thresh
-        #                     data['MSE'], data['MAE'], data['RMSE'], data['len(SE list)'] = mse, mae, rmse, len(error_list)
-                
-        #                     results = results.append(data, ignore_index=True)
-        #                     print("%d / %d" % (len(results), runs))
-
-        #                     results.to_csv("experiment_results-" + str(k) + ".csv")  
         
         else:
             done = True

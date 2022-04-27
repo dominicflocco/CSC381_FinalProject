@@ -95,15 +95,15 @@ class NeuMF():
         train_loss = history.history['loss']
         val_loss = history.history['val_loss']
 
-        plt.plot(train_loss, label='train')
-        plt.plot(val_loss, label ='val')
-        plt.yscale('log')
-        plt.ylabel('mse loss')
-        plt.xlabel('epochs')
-        plt.title(f'Model {self.model_num}: Loss Curves')
-        plt.legend()
-        plt.savefig(f'{self.cwd}/MLP_tunning/model_{self.model_num}_loss.png')
-        plt.close()
+        # plt.plot(train_loss, label='train')
+        # plt.plot(val_loss, label ='val')
+        # plt.yscale('log')
+        # plt.ylabel('mse loss')
+        # plt.xlabel('epochs')
+        # plt.title(f'Model {self.model_num}: Loss Curves')
+        # plt.legend()
+        # plt.savefig(f'{self.cwd}/MLP_tunning/model_{self.model_num}_loss.png')
+        # plt.close()
 
     def test_eval(self):
 
@@ -169,10 +169,11 @@ class NeuMF():
         for i in range(len(predictions)): 
             pred = predictions[i]
             actual = self.dataset.rating.iloc[i]
-            se = (pred - actual)**2
-            error = abs(pred-actual)
-            mse_error_list.append(se)
-            mae_error_list.append(error)
+            if actual != 0:
+                se = (pred - actual)**2
+                error = abs(pred-actual)
+                mse_error_list.append(se)
+                mae_error_list.append(error)
 
         mse = sum(mse_error_list)/len(mse_error_list)
         mae = sum(mae_error_list)/len(mae_error_list)
@@ -182,7 +183,7 @@ class NeuMF():
         print("NeuMF MAE = %f " % (mae))
         print("NeuMF RMSE = %f " % (rmse))
         
-        return mse, mae, rmse, len(mse_error_list)
+        return mse, mae, rmse, mse_error_list
 
 def ncf_read_data(filename):
     header = ['user_id','item_id','rating','timestamp']
