@@ -2893,7 +2893,7 @@ def main():
             print('cosine sim matrix')
             print (type(cosim_matrix), len(cosim_matrix))
             print()
-            # similarity_histogram(cosim_matrix)
+            similarity_histogram(cosim_matrix)
             # print(single_Hybrid_Recommendations(prefs, cosim_matrix, itemsim, '340', movies, 'Once Upon a Time in the West (1969)', movie_to_ID(movies), 1, SIG_THRESHOLD))               
             ready = True
             recAlgo = 'tfidf'
